@@ -10,6 +10,7 @@ h1,h2,p { margin-top:0; }
 .eyebrow { margin-bottom:12px; color:var(--gold); font-size:10px; font-weight:700; letter-spacing:.24em; }
 .muted { color:var(--muted); }
 .primary-button { display:inline-flex; align-items:center; justify-content:center; min-height:46px; border:1px solid var(--gold); border-radius:3px; background:var(--gold); color:#17140d; padding:0 22px; font-weight:700; cursor:pointer; }
+.auth-loading { min-height:100vh; display:grid; place-items:center; color:var(--muted); }
 
 /* Login */
 .login-shell { min-height:100vh; display:grid; grid-template-columns:minmax(380px,1.15fr) minmax(420px,.85fr); }

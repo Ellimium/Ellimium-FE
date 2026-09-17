@@ -1,8 +1,10 @@
 import Link from "next/link";
 
+import AuthGuard from "../auth-guard";
+
 export default function Room() {
   return (
-    <main className="room-shell">
+    <AuthGuard><main className="room-shell">
       <header className="room-topbar">
         <Link className="brand" href="/">ELLIMIUM</Link>
         <div className="room-title"><strong>잿빛 왕관의 유산</strong><span>카르멘 성문 · 7회차</span></div>
@@ -32,6 +34,6 @@ export default function Room() {
           <form className="chat-input"><input aria-label="채팅 메시지" placeholder="메시지 또는 /roll 1d20" /><button type="button">↑</button></form>
         </section>
       </aside>
-    </main>
+    </main></AuthGuard>
   );
 }

@@ -1,10 +1,11 @@
 import Link from "next/link";
 
+import AuthGuard from "./auth-guard";
 import LogoutButton from "./logout-button";
 
 export default function Home() {
   return (
-    <main className="lobby-shell">
+    <AuthGuard><main className="lobby-shell">
       <header className="topbar">
         <Link className="brand" href="/">ELLIMIUM</Link>
         <nav aria-label="주요 메뉴">
@@ -41,6 +42,6 @@ export default function Home() {
         <button className="campaign-card new-card" type="button"><span className="new-card-icon">＋</span><strong>새 캠페인 만들기</strong><span>빈 테이블에서 시작</span></button>
       </section>
       <footer className="lobby-footer">ELLIMIUM · PERSONAL VIRTUAL TABLETOP</footer>
-    </main>
+    </main></AuthGuard>
   );
 }
