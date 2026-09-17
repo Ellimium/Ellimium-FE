@@ -25,10 +25,9 @@ h1,h2,p { margin-top:0; }
 .login-card>label { display:grid; gap:9px; margin-bottom:20px; color:#bbb7ae; font-size:13px; }
 .login-card input { width:100%; border:1px solid #35393a; border-radius:3px; outline:none; background:#171a1c; color:var(--text); padding:14px 15px; }
 .login-card input:focus { border-color:var(--gold); }
-.login-options { display:flex; align-items:center; justify-content:space-between; margin:8px 0 28px; color:var(--muted); font-size:12px; }
-.check { display:flex; align-items:center; gap:7px; }
-.check input { width:auto; accent-color:var(--gold); }
 .link-button { border:0; background:none; color:var(--gold-soft); cursor:pointer; }
+.form-error,.form-message { margin-bottom:18px; font-size:12px; line-height:1.5; }
+.form-error { color:#dc9288; }.form-message { color:#a7b99d; }
 .full-button { width:100%; }
 .form-foot { margin-top:22px; text-align:center; color:#777a77; font-size:12px; }
 
@@ -38,7 +37,9 @@ h1,h2,p { margin-top:0; }
 .topbar nav { display:flex; gap:34px; color:var(--muted); font-size:13px; }
 .topbar nav a { padding:30px 0; border-bottom:1px solid transparent; }
 .topbar nav .nav-active { color:var(--text); border-color:var(--gold); }
-.avatar { justify-self:end; display:grid; place-items:center; width:34px; height:34px; border:1px solid #66573b; border-radius:50%; background:#2d251a; color:var(--gold-soft); font:700 13px Georgia,serif; }
+.account-actions { justify-self:end; display:flex; align-items:center; gap:16px; }
+.logout { display:flex; align-items:center; gap:8px; font-size:11px; }.logout span { max-width:180px; color:#dc9288; }
+.avatar { display:grid; place-items:center; width:34px; height:34px; border:1px solid #66573b; border-radius:50%; background:#2d251a; color:var(--gold-soft); font:700 13px Georgia,serif; }
 .lobby-hero { display:flex; align-items:end; justify-content:space-between; gap:30px; padding:84px 0 50px; }
 .lobby-hero h1 { margin-bottom:20px; font:400 clamp(40px,5vw,68px)/1.07 Georgia,serif; letter-spacing:-.035em; }
 .lobby-hero .muted { margin-bottom:0; }
