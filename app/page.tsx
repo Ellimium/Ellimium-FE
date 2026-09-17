@@ -12,7 +12,7 @@ export default function Home() {
           <Link className="nav-active" href="/">캠페인</Link>
           <Link href="/room">플레이 룸</Link>
         </nav>
-        <div className="account-actions"><LogoutButton /><Link className="avatar" href="/login" aria-label="프로필">L</Link></div>
+        <div className="account-actions"><LogoutButton /><Link className="avatar" href="/profile" aria-label="프로필">L</Link></div>
       </header>
       <section className="lobby-hero">
         <div>

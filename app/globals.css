@@ -32,6 +32,11 @@ h1,h2,p { margin-top:0; }
 .full-button { width:100%; }
 .form-foot { margin-top:22px; text-align:center; color:#777a77; font-size:12px; }
 
+/* Profile */
+.profile-shell { min-height:100vh; display:grid; place-items:center; padding:48px 24px; background:radial-gradient(circle at 50% 0,#292319 0,transparent 35%),var(--ink); }
+.profile-card { width:min(100%,460px); padding:42px; border:1px solid var(--line); background:var(--panel); }
+.profile-heading { margin:52px 0 34px; }.profile-heading h1 { font:400 38px/1.2 Georgia,serif; }
+
 /* Lobby */
 .lobby-shell { min-height:100vh; padding:0 max(28px,6vw); background:radial-gradient(circle at 80% 0,#25211a 0,transparent 32%),var(--ink); }
 .topbar { height:80px; display:grid; grid-template-columns:1fr auto 1fr; align-items:center; border-bottom:1px solid var(--line); }
