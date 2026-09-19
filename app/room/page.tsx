@@ -1,8 +1,13 @@
 import Link from "next/link";
 
-export default function Room() {
+import AuthGuard from "../auth-guard";
+import Participants from "./participants";
+
+export default async function Room({ searchParams }: { searchParams: Promise<{ roomId?: string }> }) {
+  const { roomId } = await searchParams;
+
   return (
-    <main className="room-shell">
+    <AuthGuard><main className="room-shell">
       <header className="room-topbar">
         <Link className="brand" href="/">ELLIMIUM</Link>
         <div className="room-title"><strong>잿빛 왕관의 유산</strong><span>카르멘 성문 · 7회차</span></div>
@@ -21,6 +26,7 @@ export default function Room() {
         <div className="scene-tabs"><button className="scene-active" type="button">카르멘 성문</button><button type="button">지하 수로</button><button type="button">＋</button></div>
       </section>
       <aside className="game-panel">
+        <Participants roomId={roomId} />
         <section className="initiative">
           <div className="panel-heading"><div><p className="eyebrow">COMBAT</p><h2>턴 순서</h2></div><span>2 라운드</span></div>
           <ol><li className="turn-active"><b>18</b><i className="mini-token">엘</i><span>엘리온<small>내 차례</small></span><em>12 / 18</em></li><li><b>15</b><i className="mini-token enemy">☠</i><span>해골 경비병</span><em>7 / 12</em></li><li><b>12</b><i className="mini-token">카</i><span>카일</span><em>21 / 24</em></li></ol>
@@ -32,6 +38,6 @@ export default function Room() {
           <form className="chat-input"><input aria-label="채팅 메시지" placeholder="메시지 또는 /roll 1d20" /><button type="button">↑</button></form>
         </section>
       </aside>
-    </main>
+    </main></AuthGuard>
   );
 }
