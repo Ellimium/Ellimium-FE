@@ -1,8 +1,11 @@
 import Link from "next/link";
 
 import AuthGuard from "../auth-guard";
+import Participants from "./participants";
 
-export default function Room() {
+export default async function Room({ searchParams }: { searchParams: Promise<{ roomId?: string }> }) {
+  const { roomId } = await searchParams;
+
   return (
     <AuthGuard><main className="room-shell">
       <header className="room-topbar">
@@ -23,6 +26,7 @@ export default function Room() {
         <div className="scene-tabs"><button className="scene-active" type="button">카르멘 성문</button><button type="button">지하 수로</button><button type="button">＋</button></div>
       </section>
       <aside className="game-panel">
+        <Participants roomId={roomId} />
         <section className="initiative">
           <div className="panel-heading"><div><p className="eyebrow">COMBAT</p><h2>턴 순서</h2></div><span>2 라운드</span></div>
           <ol><li className="turn-active"><b>18</b><i className="mini-token">엘</i><span>엘리온<small>내 차례</small></span><em>12 / 18</em></li><li><b>15</b><i className="mini-token enemy">☠</i><span>해골 경비병</span><em>7 / 12</em></li><li><b>12</b><i className="mini-token">카</i><span>카일</span><em>21 / 24</em></li></ol>
