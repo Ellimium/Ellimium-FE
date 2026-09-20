@@ -20,7 +20,7 @@ export default function Home() {
           <h1>다시, 모험을<br />이어갈 시간입니다.</h1>
           <p className="muted">최근 캠페인을 열거나 새로운 이야기를 시작하세요.</p>
         </div>
-        <Link className="primary-button" href="/room/create">＋ 새 캠페인</Link>
+        <div className="lobby-actions"><Link className="secondary-button" href="/room/join">초대 코드로 참가</Link><Link className="primary-button" href="/room/create">＋ 새 캠페인</Link></div>
       </section>
       <section className="campaign-grid" aria-label="캠페인 목록">
         <article className="campaign-card campaign-card-featured">
