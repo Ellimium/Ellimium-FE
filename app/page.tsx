@@ -20,7 +20,7 @@ export default function Home() {
           <h1>다시, 모험을<br />이어갈 시간입니다.</h1>
           <p className="muted">최근 캠페인을 열거나 새로운 이야기를 시작하세요.</p>
         </div>
-        <button className="primary-button" type="button">＋ 새 캠페인</button>
+        <Link className="primary-button" href="/room/create">＋ 새 캠페인</Link>
       </section>
       <section className="campaign-grid" aria-label="캠페인 목록">
         <article className="campaign-card campaign-card-featured">
@@ -39,7 +39,7 @@ export default function Home() {
             <div className="card-footer"><div className="party" aria-label="플레이어 3명"><i>유</i><i>한</i><i>민</i></div><Link className="text-button" href="/room">열기 →</Link></div>
           </div>
         </article>
-        <button className="campaign-card new-card" type="button"><span className="new-card-icon">＋</span><strong>새 캠페인 만들기</strong><span>빈 테이블에서 시작</span></button>
+        <Link className="campaign-card new-card" href="/room/create"><span className="new-card-icon">＋</span><strong>새 캠페인 만들기</strong><span>빈 테이블에서 시작</span></Link>
       </section>
       <footer className="lobby-footer">ELLIMIUM · PERSONAL VIRTUAL TABLETOP</footer>
     </main></AuthGuard>

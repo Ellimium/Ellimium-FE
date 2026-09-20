@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import AuthGuard from "../auth-guard";
+import RoomHeader from "./header";
 import Participants from "./participants";
 
 export default async function Room({ searchParams }: { searchParams: Promise<{ roomId?: string }> }) {
@@ -10,8 +11,7 @@ export default async function Room({ searchParams }: { searchParams: Promise<{ r
     <AuthGuard><main className="room-shell">
       <header className="room-topbar">
         <Link className="brand" href="/">ELLIMIUM</Link>
-        <div className="room-title"><strong>잿빛 왕관의 유산</strong><span>카르멘 성문 · 7회차</span></div>
-        <div className="room-actions"><span className="live-dot">연결됨</span><button type="button">초대</button><Link href="/">나가기</Link></div>
+        <RoomHeader roomId={roomId} />
       </header>
       <aside className="tool-rail" aria-label="맵 도구">
         <button className="tool-active" type="button" aria-label="선택">↖</button><button type="button" aria-label="이동">✥</button><button type="button" aria-label="그리기">✎</button><button type="button" aria-label="거리 측정">⌁</button><button type="button" aria-label="시야 설정">◐</button><span /><button type="button" aria-label="설정">⚙</button>
