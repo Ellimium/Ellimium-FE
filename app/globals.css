@@ -87,8 +87,13 @@ h1,h2,p { margin-top:0; }
 .room-title { display:grid; gap:3px; text-align:center; }
 .room-title strong { font:400 15px Georgia,serif; }
 .room-title span { color:var(--muted); font-size:9px; }
-.room-actions { justify-self:end; display:flex; align-items:center; gap:8px; }
+.room-actions { position:relative; justify-self:end; display:flex; align-items:center; gap:8px; }
 .room-actions button,.room-actions a { border:1px solid #333838; border-radius:2px; background:#191c1e; padding:8px 11px; font-size:10px; }
+.room-actions button:disabled { opacity:.45; cursor:not-allowed; }
+.invite-popover { position:absolute; z-index:20; top:42px; right:42px; width:min(340px,calc(100vw - 24px)); display:grid; gap:10px; padding:16px; border:1px solid #4b4436; background:#15181a; box-shadow:0 12px 32px #000; }
+.invite-popover strong { color:var(--gold-soft); font:400 16px Georgia,serif; }.invite-popover code { overflow-wrap:anywhere; color:#d6d0c4; font-size:10px; }
+.invite-popover input { min-width:0; border:1px solid #343839; background:#0f1112; color:var(--muted); padding:9px; font-size:9px; }
+.invite-popover small { color:#a7b99d; font-size:9px; }
 .live-dot { color:#839d7a; font-size:10px; margin-right:6px; }
 .live-dot::before { content:""; display:inline-block; width:6px; height:6px; margin-right:6px; border-radius:50%; background:#759a69; }
 .tool-rail { display:flex; flex-direction:column; align-items:center; gap:9px; padding:14px 8px; border-right:1px solid var(--line); background:#111416; }

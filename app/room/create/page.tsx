@@ -1,15 +1,20 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 
 import AuthGuard from "../../auth-guard";
 import { supabase } from "@/lib/supabase/client";
 
+type CreatedRoom = {
+  id: string;
+};
+
 export default function CreateRoom() {
+  const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -20,7 +25,6 @@ export default function CreateRoom() {
     const gameSystem = String(form.get("gameSystem") ?? "").trim();
 
     setError("");
-    setMessage("");
 
     if (!name || !gameSystem) {
       setError("룸 이름과 TRPG 시스템을 입력하세요.");
@@ -30,7 +34,7 @@ export default function CreateRoom() {
     setBusy(true);
 
     try {
-      const { error: createError } = await supabase.rpc("create_room", {
+      const { data, error: createError } = await supabase.rpc("create_room", {
         room_name: name,
         room_description: description || null,
         room_game_system: gameSystem,
@@ -43,8 +47,13 @@ export default function CreateRoom() {
         return;
       }
 
-      formElement.reset();
-      setMessage("룸을 생성했습니다.");
+      const createdRoom = (Array.isArray(data) ? data[0] : data) as CreatedRoom | null;
+      if (!createdRoom?.id) {
+        setError("룸은 생성됐지만 결과를 불러오지 못했습니다.");
+        return;
+      }
+
+      router.replace(`/room?roomId=${createdRoom.id}`);
     } catch {
       setError("네트워크에 연결할 수 없습니다. 연결을 확인하고 다시 시도하세요.");
     } finally {
@@ -62,7 +71,6 @@ export default function CreateRoom() {
         <label>TRPG 시스템 <small>필수 · 1~50자</small><input name="gameSystem" list="game-systems" minLength={1} maxLength={50} required disabled={busy} /></label>
         <datalist id="game-systems"><option value="D&D 5e" /><option value="CoC 7th" /></datalist>
         {error && <p className="form-error" role="alert">{error}</p>}
-        {message && <p className="form-message" role="status">{message}</p>}
         <button className="primary-button full-button" type="submit" disabled={busy}>{busy ? "생성 중…" : "룸 생성"}</button>
         <p className="form-foot"><Link href="/">← 캠페인으로 돌아가기</Link></p>
       </form>
