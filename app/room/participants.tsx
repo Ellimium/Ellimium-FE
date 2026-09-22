@@ -14,12 +14,15 @@ export default function Participants({ roomId }: { roomId?: string }) {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [loading, setLoading] = useState(Boolean(roomId));
   const [error, setError] = useState("");
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [pendingUserId, setPendingUserId] = useState("");
 
   useEffect(() => {
     let active = true;
 
     if (!roomId) {
       setParticipants([]);
+      setCurrentUserId(null);
       setLoading(false);
       return;
     }
@@ -27,6 +30,10 @@ export default function Participants({ roomId }: { roomId?: string }) {
     async function load() {
       setLoading(true);
       setError("");
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!active) return;
+      setCurrentUserId(user?.id ?? null);
 
       const { data: memberData, error: memberError } = await supabase
         .from("room_members")
@@ -87,6 +94,37 @@ export default function Participants({ roomId }: { roomId?: string }) {
     return () => { active = false; };
   }, [roomId]);
 
+  const isMaster = participants.some((participant) => participant.user_id === currentUserId && participant.role === "master");
+
+  async function changeRole(userId: string, role: Member["role"]) {
+    if (!roomId) return;
+
+    setPendingUserId(userId);
+    setError("");
+    const { error: updateError } = await supabase.rpc("set_room_member_role", {
+      target_room_id: roomId,
+      target_user_id: userId,
+      target_role: role,
+    });
+    if (updateError) setError(updateError.message);
+    else setParticipants((current) => current.map((participant) => participant.user_id === userId ? { ...participant, role } : participant));
+    setPendingUserId("");
+  }
+
+  async function forceRemove(userId: string) {
+    if (!roomId) return;
+
+    setPendingUserId(userId);
+    setError("");
+    const { error: removeError } = await supabase.rpc("force_remove_room_member", {
+      target_room_id: roomId,
+      target_user_id: userId,
+    });
+    if (removeError) setError(removeError.message);
+    else setParticipants((current) => current.filter((participant) => participant.user_id !== userId));
+    setPendingUserId("");
+  }
+
   return (
     <section className="participants" aria-label="참가자 목록">
       <div className="panel-heading"><div><p className="eyebrow">PARTY</p><h2>참가자</h2></div><span>{loading ? "불러오는 중" : `${participants.length}명`}</span></div>
@@ -97,6 +135,12 @@ export default function Participants({ roomId }: { roomId?: string }) {
           <li key={participant.user_id}>
             <i className="participant-avatar">{participant.avatarUrl ? <img src={participant.avatarUrl} alt="" /> : participant.nickname.slice(0, 1)}</i>
             <span><strong>{participant.nickname}</strong><small>{roleName[participant.role]}</small></span>
+            {isMaster && participant.user_id !== currentUserId && <div className="participant-actions">
+              <select value={participant.role} disabled={pendingUserId === participant.user_id} aria-label={`${participant.nickname} 역할`} onChange={(event) => { void changeRole(participant.user_id, event.target.value as Member["role"]); }}>
+                {Object.entries(roleName).map(([role, name]) => <option key={role} value={role}>{name}</option>)}
+              </select>
+              <button type="button" disabled={pendingUserId === participant.user_id} aria-label={`${participant.nickname} 강제 퇴장`} onClick={() => { void forceRemove(participant.user_id); }}>퇴장</button>
+            </div>}
           </li>
         ))}
       </ul>
