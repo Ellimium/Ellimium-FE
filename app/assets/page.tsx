@@ -2,10 +2,11 @@
 
 import { FunctionsHttpError } from "@supabase/supabase-js";
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 import AuthGuard from "../auth-guard";
 import { supabase } from "@/lib/supabase/client";
+import { Asset, assetImagePaths } from "./asset-images";
 import { validateUpload } from "./upload-validation";
 
 const acceptedImages = "image/jpeg,image/png,image/webp,image/gif";
@@ -24,8 +25,41 @@ async function errorMessage(error: unknown) {
 
 export default function Assets() {
   const [busy, setBusy] = useState(false);
+  const [assets, setAssets] = useState<(Asset & { thumbnailUrl?: string; mapUrl?: string })[]>([]);
+  const [loadingAssets, setLoadingAssets] = useState(true);
+  const [assetsError, setAssetsError] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+
+  async function loadAssets() {
+    setLoadingAssets(true);
+    setAssetsError("");
+    try {
+      const { data, error: queryError } = await supabase
+        .from("assets")
+        .select("id, category, storage_path, thumbnail_storage_path, created_at")
+        .order("created_at", { ascending: false });
+      if (queryError) throw queryError;
+
+      const imagePaths = assetImagePaths(data);
+      const { data: signedUrls, error: signedUrlError } = imagePaths.length
+        ? await supabase.storage.from("assets").createSignedUrls(imagePaths, 60 * 60)
+        : { data: [], error: null };
+      if (signedUrlError) throw signedUrlError;
+      const urls = new Map(signedUrls.map(({ path, signedUrl }) => [path, signedUrl]));
+      setAssets(data.map((asset) => ({
+        ...asset,
+        thumbnailUrl: asset.thumbnail_storage_path ? urls.get(asset.thumbnail_storage_path) ?? undefined : undefined,
+        mapUrl: asset.category === "map" ? urls.get(asset.storage_path) ?? undefined : undefined,
+      })));
+    } catch {
+      setAssetsError("자산 목록을 불러올 수 없습니다. 잠시 후 다시 시도하세요.");
+    } finally {
+      setLoadingAssets(false);
+    }
+  }
+
+  useEffect(() => { void loadAssets(); }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,6 +92,7 @@ export default function Assets() {
       }
       form.reset();
       setMessage("자산을 업로드했습니다.");
+      void loadAssets();
     } catch {
       setError("업로드 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.");
     } finally {
@@ -66,7 +101,7 @@ export default function Assets() {
   }
 
   return (
-    <AuthGuard><main className="create-room-shell">
+    <AuthGuard><main className="create-room-shell"><div className="assets-content">
       <form className="login-card create-room-card" onSubmit={handleSubmit} aria-busy={busy}>
         <Link className="brand" href="/">ELLIMIUM</Link>
         <div className="profile-heading"><p className="eyebrow">ASSET LIBRARY</p><h1>이미지 자산 추가</h1></div>
@@ -83,6 +118,17 @@ export default function Assets() {
         <button className="primary-button full-button" type="submit" disabled={busy}>{busy ? "업로드 중…" : "자산 업로드"}</button>
         <p className="form-foot"><Link href="/">← 캠페인으로 돌아가기</Link></p>
       </form>
-    </main></AuthGuard>
+      <section className="asset-library" aria-labelledby="asset-list-title" aria-busy={loadingAssets}>
+        <div className="asset-library-heading"><div><p className="eyebrow">UPLOADED ASSETS</p><h2 id="asset-list-title">내 자산</h2></div><span>{assets.length}개</span></div>
+        {assetsError && <p className="form-error" role="alert">{assetsError}</p>}
+        {loadingAssets ? <p className="muted">자산을 불러오는 중…</p> : assets.length === 0 ? <p className="muted">아직 업로드한 자산이 없습니다.</p> : <div className="asset-grid">
+          {assets.map((asset) => <article className="asset-card" key={asset.id}>
+            <div className="asset-thumbnail">{asset.thumbnailUrl ? <img src={asset.thumbnailUrl} alt={`${asset.category} 썸네일`} /> : <span>{asset.category}</span>}</div>
+            <div><strong>{asset.category === "map" ? "맵" : asset.category === "token" ? "토큰" : asset.category === "item" ? "아이템" : "기타"}</strong><small>{asset.thumbnailUrl ? "사용자 썸네일" : "기본 썸네일"}</small></div>
+            {asset.mapUrl && <img className="asset-map-result" src={asset.mapUrl} alt="리사이징된 맵 결과" />}
+          </article>)}
+        </div>}
+      </section>
+    </div></main></AuthGuard>
   );
 }

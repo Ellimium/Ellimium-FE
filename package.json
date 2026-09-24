@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "test:assets": "node --experimental-strip-types --test app/assets/upload-validation.test.ts",
+    "test:assets": "node --experimental-strip-types --test app/assets/*.test.ts",
     "start": "next start"
   },
   "dependencies": {
