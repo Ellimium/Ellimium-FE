@@ -11,6 +11,7 @@ export default function Home() {
         <nav aria-label="주요 메뉴">
           <Link className="nav-active" href="/">캠페인</Link>
           <Link href="/room">플레이 룸</Link>
+          <Link href="/assets">자산</Link>
         </nav>
         <div className="account-actions"><LogoutButton /><Link className="avatar" href="/profile" aria-label="프로필">L</Link></div>
       </header>
