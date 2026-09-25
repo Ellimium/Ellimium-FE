@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import AuthGuard from "../auth-guard";
 import RoomHeader from "./header";
+import MapRegistration from "./map-registration";
 import Participants from "./participants";
 
 export default async function Room({ searchParams }: { searchParams: Promise<{ roomId?: string }> }) {
@@ -26,6 +27,7 @@ export default async function Room({ searchParams }: { searchParams: Promise<{ r
         <div className="scene-tabs"><button className="scene-active" type="button">카르멘 성문</button><button type="button">지하 수로</button><button type="button">＋</button></div>
       </section>
       <aside className="game-panel">
+        <MapRegistration roomId={roomId} />
         <Participants roomId={roomId} />
         <section className="initiative">
           <div className="panel-heading"><div><p className="eyebrow">COMBAT</p><h2>턴 순서</h2></div><span>2 라운드</span></div>
