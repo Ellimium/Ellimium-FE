@@ -2,7 +2,9 @@ import Link from "next/link";
 
 import AuthGuard from "../auth-guard";
 import RoomHeader from "./header";
+import MapRegistration from "./map-registration";
 import Participants from "./participants";
+import RoomMap from "./room-map";
 
 export default async function Room({ searchParams }: { searchParams: Promise<{ roomId?: string }> }) {
   const { roomId } = await searchParams;
@@ -18,14 +20,10 @@ export default async function Room({ searchParams }: { searchParams: Promise<{ r
       </aside>
       <section className="map-stage" aria-label="게임 맵">
         <div className="map-toolbar"><button type="button">−</button><span>75%</span><button type="button">＋</button></div>
-        <div className="battle-map">
-          <div className="map-room room-a" /><div className="map-room room-b" /><div className="map-room room-c" />
-          <span className="map-label gate-label">NORTH GATE</span><span className="map-label hall-label">OLD GUARD HALL</span>
-          <button className="token token-mage" type="button" aria-label="엘리온, 마법사">엘</button><button className="token token-rogue" type="button" aria-label="카일, 도적">카</button><button className="token token-enemy" type="button" aria-label="해골 경비병">☠</button><button className="token token-enemy token-enemy-two" type="button" aria-label="해골 경비병">☠</button>
-        </div>
-        <div className="scene-tabs"><button className="scene-active" type="button">카르멘 성문</button><button type="button">지하 수로</button><button type="button">＋</button></div>
+        <RoomMap roomId={roomId} />
       </section>
       <aside className="game-panel">
+        <MapRegistration roomId={roomId} />
         <Participants roomId={roomId} />
         <section className="initiative">
           <div className="panel-heading"><div><p className="eyebrow">COMBAT</p><h2>턴 순서</h2></div><span>2 라운드</span></div>
