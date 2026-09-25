@@ -59,6 +59,7 @@ export default function MapRegistration({ roomId }: { roomId?: string }) {
         .from("assets")
         .select("id, storage_path")
         .eq("category", "map")
+        .eq("owner_id", user.id)
         .order("created_at", { ascending: false });
 
       if (!active) return;
