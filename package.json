@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "test:assets": "node --experimental-strip-types --test app/assets/*.test.ts",
+    "test:room": "node --experimental-strip-types --test app/room/*.test.ts",
     "start": "next start"
   },
   "dependencies": {
