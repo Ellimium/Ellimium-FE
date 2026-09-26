@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import AuthGuard from "../auth-guard";
+import DiceRoll from "./dice-roll";
 import RoomHeader from "./header";
 import MapRegistration from "./map-registration";
 import Participants from "./participants";
@@ -30,11 +31,7 @@ export default async function Room({ searchParams }: { searchParams: Promise<{ r
           <ol><li className="turn-active"><b>18</b><i className="mini-token">엘</i><span>엘리온<small>내 차례</small></span><em>12 / 18</em></li><li><b>15</b><i className="mini-token enemy">☠</i><span>해골 경비병</span><em>7 / 12</em></li><li><b>12</b><i className="mini-token">카</i><span>카일</span><em>21 / 24</em></li></ol>
           <button className="end-turn" type="button">턴 종료</button>
         </section>
-        <section className="chat-panel">
-          <div className="panel-tabs"><button className="active" type="button">채팅</button><button type="button">기록</button></div>
-          <div className="messages"><p className="system-message">전투가 시작되었습니다.</p><div className="message"><strong>GM</strong><span>무너진 회랑 너머에서 갑옷이 긁히는 소리가 들립니다.</span></div><div className="message"><strong>카일</strong><span>그림자에 몸을 숨기고 앞을 살펴볼게요.</span></div><div className="dice-message"><span>D20 · 은신</span><strong>17</strong><small>14 + 3</small></div></div>
-          <form className="chat-input"><input aria-label="채팅 메시지" placeholder="메시지 또는 /roll 1d20" /><button type="button">↑</button></form>
-        </section>
+        <DiceRoll roomId={roomId} />
       </aside>
     </main></AuthGuard>
   );
