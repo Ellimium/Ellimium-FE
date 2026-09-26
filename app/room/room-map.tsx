@@ -1,9 +1,10 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, KeyboardEvent, PointerEvent, useEffect, useRef, useState } from "react";
 
 import { assetImagePaths, type Asset } from "../assets/asset-images";
 import { supabase } from "@/lib/supabase/client";
+import { gridCoordinate, mapPointFromClient } from "./token-position";
 
 type Role = "master" | "player" | "spectator";
 type RoomMapRow = {
@@ -27,6 +28,7 @@ type DisplayMap = RoomMapRow & { mapUrl: string; thumbnailUrl?: string };
 type DisplayToken = RoomTokenRow & { imageUrl?: string };
 type TokenAsset = Pick<Asset, "id" | "storage_path">;
 type PlayerOption = { userId: string; nickname: string };
+type DragState = { tokenId: string; pointerId: number; offsetX: number; offsetY: number; startX: number; startY: number };
 
 export default function RoomMap({ roomId }: { roomId?: string }) {
   const [maps, setMaps] = useState<DisplayMap[]>([]);
@@ -41,6 +43,8 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [dragging, setDragging] = useState<DragState | null>(null);
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -157,6 +161,151 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
 
   useEffect(() => { setMapSize(null); }, [selectedId]);
 
+  useEffect(() => {
+    if (!roomId || !maps.length) return;
+
+    let active = true;
+    const mapIds = maps.map((map) => map.id);
+    const channel = supabase.channel(`room:${roomId}:tokens`, { config: { private: true, broadcast: { self: false } } });
+    channelRef.current = channel;
+
+    async function refreshPositions() {
+      const { data, error: positionError } = await supabase.from("room_tokens").select("id, x, y").in("map_id", mapIds);
+      if (!active) return;
+      if (positionError) {
+        setError("토큰의 확정 위치를 다시 불러올 수 없습니다.");
+        return;
+      }
+
+      const positions = new Map((data ?? []).map((token) => [token.id, token]));
+      setTokens((current) => current.map((token) => {
+        const position = positions.get(token.id);
+        return position ? { ...token, x: Number(position.x), y: Number(position.y) } : token;
+      }));
+    }
+
+    channel
+      .on("broadcast", { event: "token-move" }, ({ payload }) => {
+        const tokenId = typeof payload?.token_id === "string" ? payload.token_id : "";
+        const x = Number(payload?.x);
+        const y = Number(payload?.y);
+        if (!tokenId || !Number.isFinite(x) || !Number.isFinite(y)) return;
+        setTokens((current) => current.map((token) => token.id === tokenId ? { ...token, x, y } : token));
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "room_tokens" }, ({ new: updated }) => {
+        const tokenId = typeof updated.id === "string" ? updated.id : "";
+        const x = Number(updated.x);
+        const y = Number(updated.y);
+        if (!tokenId || !Number.isFinite(x) || !Number.isFinite(y)) return;
+        setTokens((current) => current.map((token) => token.id === tokenId ? { ...token, x, y } : token));
+      })
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") void refreshPositions();
+        if (status === "CHANNEL_ERROR") setError("토큰 실시간 이동 채널에 연결할 수 없습니다.");
+      });
+
+    return () => {
+      active = false;
+      channelRef.current = null;
+      void supabase.removeChannel(channel);
+    };
+  }, [maps, roomId]);
+
+  function broadcastPosition(tokenId: string, x: number, y: number) {
+    void channelRef.current?.send({ type: "broadcast", event: "token-move", payload: { token_id: tokenId, x, y } });
+  }
+
+  function dragPosition(clientX: number, clientY: number, svg: SVGSVGElement, drag: DragState) {
+    if (!mapSize) return null;
+    const point = mapPointFromClient(clientX, clientY, svg.getBoundingClientRect(), mapSize);
+    if (!point) return null;
+    return {
+      x: gridCoordinate(point.x - drag.offsetX, offsetX, cellSize),
+      y: gridCoordinate(point.y - drag.offsetY, offsetY, cellSize),
+    };
+  }
+
+  function startDrag(event: PointerEvent<SVGGElement>, token: DisplayToken) {
+    if (!mapSize) return;
+    const svg = event.currentTarget.ownerSVGElement;
+    if (!svg) return;
+    const point = mapPointFromClient(event.clientX, event.clientY, svg.getBoundingClientRect(), mapSize);
+    if (!point) return;
+
+    svg.setPointerCapture(event.pointerId);
+    setDragging({
+      tokenId: token.id,
+      pointerId: event.pointerId,
+      offsetX: point.x - (offsetX + Number(token.x) * cellSize),
+      offsetY: point.y - (offsetY + Number(token.y) * cellSize),
+      startX: Number(token.x),
+      startY: Number(token.y),
+    });
+    event.preventDefault();
+  }
+
+  function moveDrag(event: PointerEvent<SVGSVGElement>) {
+    if (!dragging || event.pointerId !== dragging.pointerId) return;
+    const position = dragPosition(event.clientX, event.clientY, event.currentTarget, dragging);
+    if (!position) return;
+
+    setTokens((current) => current.map((token) => token.id === dragging.tokenId ? { ...token, ...position } : token));
+    broadcastPosition(dragging.tokenId, position.x, position.y);
+  }
+
+  async function persistPosition(tokenId: string, x: number, y: number, startX: number, startY: number) {
+    setError("");
+    const { data, error: updateError } = await supabase
+      .from("room_tokens")
+      .update({ x, y })
+      .eq("id", tokenId)
+      .select("id")
+      .maybeSingle();
+
+    if (updateError || !data) {
+      setTokens((current) => current.map((token) => token.id === tokenId ? { ...token, x: startX, y: startY } : token));
+      broadcastPosition(tokenId, startX, startY);
+      setError("토큰의 최종 위치를 저장할 수 없습니다.");
+    }
+  }
+
+  function finishDrag(event: PointerEvent<SVGSVGElement>) {
+    if (!dragging || event.pointerId !== dragging.pointerId) return;
+    const drag = dragging;
+    const position = dragPosition(event.clientX, event.clientY, event.currentTarget, drag);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setDragging(null);
+    if (!position) return;
+
+    setTokens((current) => current.map((token) => token.id === drag.tokenId ? { ...token, ...position } : token));
+    broadcastPosition(drag.tokenId, position.x, position.y);
+    void persistPosition(drag.tokenId, position.x, position.y, drag.startX, drag.startY);
+  }
+
+  function cancelDrag(event: PointerEvent<SVGSVGElement>) {
+    if (!dragging || event.pointerId !== dragging.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setTokens((current) => current.map((token) => token.id === dragging.tokenId ? { ...token, x: dragging.startX, y: dragging.startY } : token));
+    setDragging(null);
+  }
+
+  function moveWithKeyboard(event: KeyboardEvent<SVGGElement>, token: DisplayToken) {
+    const movement = {
+      ArrowLeft: [-1, 0],
+      ArrowRight: [1, 0],
+      ArrowUp: [0, -1],
+      ArrowDown: [0, 1],
+    }[event.key];
+    if (!movement) return;
+
+    event.preventDefault();
+    const x = Number(token.x) + movement[0];
+    const y = Number(token.y) + movement[1];
+    setTokens((current) => current.map((currentToken) => currentToken.id === token.id ? { ...currentToken, x, y } : currentToken));
+    broadcastPosition(token.id, x, y);
+    void persistPosition(token.id, x, y, Number(token.x), Number(token.y));
+  }
+
   async function createToken(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedId) return;
@@ -211,14 +360,31 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         alt="등록된 룸 맵"
         onLoad={(event) => setMapSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
       />}
-      {selected && mapSize && <svg className="room-map-canvas" viewBox={`0 0 ${mapSize.width} ${mapSize.height}`} aria-label="토큰이 배치된 룸 맵">
+      {selected && mapSize && <svg
+        className="room-map-canvas"
+        viewBox={`0 0 ${mapSize.width} ${mapSize.height}`}
+        aria-label="토큰이 배치된 룸 맵"
+        onPointerMove={moveDrag}
+        onPointerUp={finishDrag}
+        onPointerCancel={cancelDrag}
+      >
         <image href={selected.mapUrl} width={mapSize.width} height={mapSize.height} />
         {selectedTokens.map((token) => {
           const tokenSize = Number(token.size) * cellSize;
           const x = offsetX + Number(token.x) * cellSize;
           const y = offsetY + Number(token.y) * cellSize;
           const controllable = role === "master" || (role === "player" && token.owner_id === currentUserId);
-          return <g className={controllable ? "map-token token-controllable" : "map-token"} key={token.id} transform={`translate(${x} ${y})`}>
+          const className = `map-token${controllable ? " token-controllable" : ""}${dragging?.tokenId === token.id ? " token-dragging" : ""}`;
+          return <g
+            className={className}
+            key={token.id}
+            transform={`translate(${x} ${y})`}
+            role={controllable ? "button" : undefined}
+            tabIndex={controllable ? 0 : undefined}
+            aria-label={`${token.name} 이동, 방향키 사용 가능`}
+            onPointerDown={controllable ? (event) => startDrag(event, token) : undefined}
+            onKeyDown={controllable ? (event) => moveWithKeyboard(event, token) : undefined}
+          >
             <title>{token.name}{controllable ? " · 조작 가능" : " · 조회 전용"}</title>
             {token.imageUrl
               ? <image href={token.imageUrl} width={tokenSize} height={tokenSize} preserveAspectRatio="xMidYMid slice" />
