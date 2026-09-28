@@ -1,27 +1,24 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { diceErrorMessage } from "./dice-error";
+import { resultsText, visibleDiceRolls } from "./dice-log";
+import type { DiceRollLog, DiceSort } from "./dice-log";
 import { supabase } from "@/lib/supabase/client";
 
 type Role = "master" | "player" | "spectator";
-type DiceRoll = {
-  id: string;
-  roller_id: string;
-  expression: string;
-  individual_results: unknown;
-  total: number | string;
-  created_at: string;
-};
+type Profile = { user_id: string; nickname: string };
 
-function resultsText(results: unknown) {
-  return Array.isArray(results) ? results.join(" + ") : String(results);
-}
+const dateTime = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
 
 export default function DiceRoll({ roomId }: { roomId?: string }) {
   const [role, setRole] = useState<Role | null>(null);
-  const [rolls, setRolls] = useState<DiceRoll[]>([]);
+  const [rolls, setRolls] = useState<DiceRollLog[]>([]);
+  const [rollerNames, setRollerNames] = useState<Record<string, string>>({});
+  const [rollerFilter, setRollerFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<DiceSort>("desc");
   const [expression, setExpression] = useState("");
   const [loading, setLoading] = useState(Boolean(roomId));
   const [rolling, setRolling] = useState(false);
@@ -54,10 +51,23 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
       if (!active) return;
       if (memberError || rollError) {
         setError("주사위 기록을 불러오지 못했습니다.");
-      } else {
-        setRole((member?.role as Role | undefined) ?? null);
-        setRolls((rollData ?? []) as DiceRoll[]);
+        setLoading(false);
+        return;
       }
+
+      const nextRolls = (rollData ?? []) as DiceRollLog[];
+      const rollerIds = [...new Set([user.id, ...nextRolls.map((roll) => roll.roller_id)])];
+      const { data: profileData, error: profileError } = await supabase.from("profiles").select("user_id, nickname").in("user_id", rollerIds);
+      if (!active) return;
+      if (profileError) {
+        setError("주사위 기록의 사용자 정보를 불러오지 못했습니다.");
+        setLoading(false);
+        return;
+      }
+
+      setRole((member?.role as Role | undefined) ?? null);
+      setRolls(nextRolls);
+      setRollerNames(Object.fromEntries(((profileData ?? []) as Profile[]).map((profile) => [profile.user_id, profile.nickname])));
       setLoading(false);
     }
 
@@ -66,6 +76,8 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
   }, [roomId]);
 
   const canRoll = role === "master" || role === "player";
+  const rollers = useMemo(() => [...new Set(rolls.map((roll) => roll.roller_id))].map((id) => ({ id, name: rollerNames[id] ?? "알 수 없는 사용자" })), [rolls, rollerNames]);
+  const visibleRolls = useMemo(() => visibleDiceRolls(rolls, rollerNames, rollerFilter, search, sort), [rolls, rollerNames, rollerFilter, search, sort]);
 
   async function roll(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -83,7 +95,7 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
         return;
       }
 
-      const result = (Array.isArray(data) ? data[0] : data) as DiceRoll | null;
+      const result = (Array.isArray(data) ? data[0] : data) as DiceRollLog | null;
       if (!result?.id) {
         setError("주사위 요청을 처리하지 못했습니다.");
         return;
@@ -99,11 +111,23 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
 
   return <section className="chat-panel dice-panel" aria-label="주사위" aria-busy={loading || rolling}>
     <div className="panel-tabs"><button className="active" type="button">주사위</button><span>기록</span></div>
+    <div className="dice-log-tools">
+      <input type="search" aria-label="주사위 로그 검색" placeholder="로그 검색" value={search} onChange={(event) => setSearch(event.target.value)} />
+      <select aria-label="주사위 사용자 필터" value={rollerFilter} onChange={(event) => setRollerFilter(event.target.value)}>
+        <option value="">전체 사용자</option>
+        {rollers.map((roller) => <option key={roller.id} value={roller.id}>{roller.name}</option>)}
+      </select>
+      <select aria-label="주사위 시간순 정렬" value={sort} onChange={(event) => setSort(event.target.value as DiceSort)}>
+        <option value="desc">최신순</option><option value="asc">오래된순</option>
+      </select>
+    </div>
     <div className="messages dice-list">
       {loading && <p className="system-message">주사위 기록을 불러오는 중…</p>}
       {!loading && !rolls.length && <p className="system-message">아직 주사위 기록이 없습니다.</p>}
-      {rolls.map((roll) => <div className="dice-message" key={roll.id}>
-        <span>{roll.expression}</span><strong>{roll.total}</strong><small>{resultsText(roll.individual_results)}</small>
+      {!loading && rolls.length > 0 && !visibleRolls.length && <p className="system-message">조건에 맞는 주사위 기록이 없습니다.</p>}
+      {visibleRolls.map((roll) => <div className="dice-message" key={roll.id}>
+        <span className="dice-author">{rollerNames[roll.roller_id] ?? "알 수 없는 사용자"}<time dateTime={roll.created_at}>{dateTime.format(new Date(roll.created_at))}</time></span>
+        <strong>{roll.total}</strong><span>{roll.expression}</span><small>{resultsText(roll.individual_results)}</small>
       </div>)}
     </div>
     {error && <p className="form-error dice-error" role="alert">{error}</p>}
