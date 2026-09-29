@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import AuthGuard from "../auth-guard";
+import Chat from "./chat";
 import CharacterSheets from "./character-sheets";
 import DiceRoll from "./dice-roll";
 import RoomHeader from "./header";
@@ -33,6 +34,7 @@ export default async function Room({ searchParams }: { searchParams: Promise<{ r
           <ol><li className="turn-active"><b>18</b><i className="mini-token">엘</i><span>엘리온<small>내 차례</small></span><em>12 / 18</em></li><li><b>15</b><i className="mini-token enemy">☠</i><span>해골 경비병</span><em>7 / 12</em></li><li><b>12</b><i className="mini-token">카</i><span>카일</span><em>21 / 24</em></li></ol>
           <button className="end-turn" type="button">턴 종료</button>
         </section>
+        <Chat roomId={roomId} />
         <DiceRoll roomId={roomId} />
       </aside>
     </main></AuthGuard>
