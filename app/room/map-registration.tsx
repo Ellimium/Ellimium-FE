@@ -85,20 +85,25 @@ export default function MapRegistration({ roomId }: { roomId?: string }) {
     setBusy(true);
     setError("");
     setMessage("");
-    const { error: insertError } = await supabase.from("room_maps").insert({
-      room_id: roomId,
-      asset_id: String(form.get("assetId")),
-      grid_cell_size: number("gridCellSize"),
-      grid_offset_x: number("gridOffsetX"),
-      grid_offset_y: number("gridOffsetY"),
-    });
-    setBusy(false);
+    try {
+      const { error: insertError } = await supabase.from("room_maps").insert({
+        room_id: roomId,
+        asset_id: String(form.get("assetId")),
+        grid_cell_size: number("gridCellSize"),
+        grid_offset_x: number("gridOffsetX"),
+        grid_offset_y: number("gridOffsetY"),
+      });
 
-    if (insertError) {
-      setError("맵을 등록할 수 없습니다. 마스터 권한과 소유한 맵 자산을 확인하세요.");
-      return;
+      if (insertError) {
+        setError("맵을 등록할 수 없습니다. 마스터 권한과 소유한 맵 자산을 확인하세요.");
+        return;
+      }
+      setMessage("룸 맵을 등록했습니다.");
+    } catch {
+      setError("맵 서버에 연결하지 못했습니다. 저장 여부를 확인한 뒤 다시 시도하세요.");
+    } finally {
+      setBusy(false);
     }
-    setMessage("룸 맵을 등록했습니다.");
   }
 
   if (!roomId) return null;

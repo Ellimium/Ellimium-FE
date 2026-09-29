@@ -255,18 +255,21 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
 
   async function persistPosition(tokenId: string, x: number, y: number, startX: number, startY: number) {
     setError("");
-    const { data, error: updateError } = await supabase
-      .from("room_tokens")
-      .update({ x, y })
-      .eq("id", tokenId)
-      .select("id")
-      .maybeSingle();
-
-    if (updateError || !data) {
-      setTokens((current) => current.map((token) => token.id === tokenId ? { ...token, x: startX, y: startY } : token));
-      broadcastPosition(tokenId, startX, startY);
-      setError("토큰의 최종 위치를 저장할 수 없습니다.");
+    try {
+      const { data, error: updateError } = await supabase
+        .from("room_tokens")
+        .update({ x, y })
+        .eq("id", tokenId)
+        .select("id")
+        .maybeSingle();
+      if (!updateError && data) return;
+    } catch {
+      // 아래에서 확정 좌표로 복구하고 같은 오류를 표시한다.
     }
+
+    setTokens((current) => current.map((token) => token.id === tokenId ? { ...token, x: startX, y: startY } : token));
+    broadcastPosition(tokenId, startX, startY);
+    setError("토큰의 최종 위치를 저장할 수 없습니다.");
   }
 
   function finishDrag(event: PointerEvent<SVGSVGElement>) {
@@ -318,30 +321,34 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     setBusy(true);
     setError("");
     setMessage("");
-    const { data, error: insertError } = await supabase.from("room_tokens").insert({
-      map_id: selectedId,
-      name: String(form.get("name") ?? "").trim(),
-      image_asset_id: imageAssetId || null,
-      owner_id: ownerId || null,
-      x: Number(form.get("x")),
-      y: Number(form.get("y")),
-      size: Number(form.get("size")),
-    }).select("id, map_id, owner_id, image_asset_id, name, x, y, size").single();
+    try {
+      const { data, error: insertError } = await supabase.from("room_tokens").insert({
+        map_id: selectedId,
+        name: String(form.get("name") ?? "").trim(),
+        image_asset_id: imageAssetId || null,
+        owner_id: ownerId || null,
+        x: Number(form.get("x")),
+        y: Number(form.get("y")),
+        size: Number(form.get("size")),
+      }).select("id, map_id, owner_id, image_asset_id, name, x, y, size").single();
 
-    if (insertError) {
-      setError("토큰을 만들 수 없습니다. 이름, 이미지와 소유자를 확인하세요.");
+      if (insertError || !data) {
+        setError("토큰을 만들 수 없습니다. 이름, 이미지와 소유자를 확인하세요.");
+        return;
+      }
+
+      const asset = tokenAssets.find(({ id }) => id === imageAssetId);
+      const { data: signedImage } = asset
+        ? await supabase.storage.from("assets").createSignedUrl(asset.storage_path, 60 * 60)
+        : { data: null };
+      setTokens((current) => [...current, { ...(data as RoomTokenRow), imageUrl: signedImage?.signedUrl }]);
+      formElement.reset();
+      setMessage("토큰을 배치했습니다.");
+    } catch {
+      setError("토큰 서버에 연결하지 못했습니다. 저장 여부를 확인한 뒤 다시 시도하세요.");
+    } finally {
       setBusy(false);
-      return;
     }
-
-    const asset = tokenAssets.find(({ id }) => id === imageAssetId);
-    const { data: signedImage } = asset
-      ? await supabase.storage.from("assets").createSignedUrl(asset.storage_path, 60 * 60)
-      : { data: null };
-    setTokens((current) => [...current, { ...(data as RoomTokenRow), imageUrl: signedImage?.signedUrl }]);
-    formElement.reset();
-    setMessage("토큰을 배치했습니다.");
-    setBusy(false);
   }
 
   const selected = maps.find((map) => map.id === selectedId);
