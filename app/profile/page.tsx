@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 
 import AuthGuard from "../auth-guard";
+import { loadCurrentProfile } from "./profile-query";
 import { supabase } from "@/lib/supabase/client";
 
 export default function Profile() {
@@ -21,13 +22,17 @@ export default function Profile() {
   useEffect(() => {
     let active = true;
 
-    Promise.all([
-      supabase.auth.getUser(),
-      supabase.from("profiles").select("nickname, avatar_path").single(),
-    ]).then(async ([userResult, profileResult]) => {
+    supabase.auth.getUser().then(async (userResult) => {
       if (!active) return;
-      if (userResult.error || profileResult.error || !userResult.data.user) {
-        setError(userResult.error?.message ?? profileResult.error?.message ?? "프로필을 불러올 수 없습니다.");
+      if (userResult.error || !userResult.data.user) {
+        setError(userResult.error?.message ?? "프로필을 불러올 수 없습니다.");
+        return;
+      }
+
+      const profileResult = await loadCurrentProfile(supabase, userResult.data.user.id);
+      if (!active) return;
+      if (profileResult.error) {
+        setError(profileResult.error.message);
         return;
       }
 
