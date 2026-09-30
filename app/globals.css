@@ -69,6 +69,7 @@ h1,h2,p { margin-top:0; }
 .lobby-hero h1 { margin-bottom:20px; font:400 clamp(40px,5vw,68px)/1.07 Georgia,serif; letter-spacing:-.035em; }
 .lobby-hero .muted { margin-bottom:0; }
 .campaign-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:22px; }
+.lobby-state { grid-column:1/-1; min-height:120px; margin:0; padding:32px 0; }
 .campaign-card { min-height:370px; overflow:hidden; border:1px solid var(--line); border-radius:4px; background:var(--panel); text-align:left; }
 .campaign-card-featured { border-color:#625539; }
 .card-art { position:relative; height:178px; overflow:hidden; border-bottom:1px solid var(--line); }
