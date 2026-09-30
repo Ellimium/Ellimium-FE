@@ -1,16 +1,48 @@
-import Link from "next/link";
+"use client";
 
+import Link from "next/link";
+import { useEffect, useState } from "react";
+
+import { supabase } from "@/lib/supabase/client";
 import AuthGuard from "./auth-guard";
 import LogoutButton from "./logout-button";
 
+type Room = {
+  id: string;
+  name: string;
+  description: string | null;
+  game_system: string;
+};
+
 export default function Home() {
+  return <AuthGuard><Lobby /></AuthGuard>;
+}
+
+function Lobby() {
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+
+    supabase.from("rooms").select("id, name, description, game_system").order("created_at", { ascending: false })
+      .then(({ data, error: roomsError }) => {
+        if (!active) return;
+        if (roomsError) setError("캠페인 목록을 불러오지 못했습니다.");
+        else setRooms(data ?? []);
+        setLoading(false);
+      });
+
+    return () => { active = false; };
+  }, []);
+
   return (
-    <AuthGuard><main className="lobby-shell">
+    <main className="lobby-shell">
       <header className="topbar">
         <Link className="brand" href="/">ELLIMIUM</Link>
         <nav aria-label="주요 메뉴">
           <Link className="nav-active" href="/">캠페인</Link>
-          <Link href="/room">플레이 룸</Link>
           <Link href="/assets">자산</Link>
         </nav>
         <div className="account-actions"><LogoutButton /><Link className="avatar" href="/profile" aria-label="프로필">L</Link></div>
@@ -23,26 +55,21 @@ export default function Home() {
         </div>
         <div className="lobby-actions"><Link className="secondary-button" href="/room/join">초대 코드로 참가</Link><Link className="primary-button" href="/room/create">＋ 새 캠페인</Link></div>
       </section>
-      <section className="campaign-grid" aria-label="캠페인 목록">
-        <article className="campaign-card campaign-card-featured">
-          <div className="card-art ruins-art"><span>진행 중</span></div>
+      <section className="campaign-grid" aria-label="캠페인 목록" aria-busy={loading}>
+        {loading && <p className="lobby-state muted">캠페인을 불러오는 중…</p>}
+        {!loading && error && <p className="lobby-state form-error" role="alert">{error}</p>}
+        {!loading && !error && rooms.length === 0 && <p className="lobby-state muted">참여 중인 캠페인이 없습니다.</p>}
+        {!loading && !error && rooms.map((room) => <article className="campaign-card" key={room.id}>
+          <div className="card-art ruins-art"><span>참여 중</span></div>
           <div className="card-body">
-            <p className="eyebrow">D&amp;D 5E · 7회차</p><h2>잿빛 왕관의 유산</h2>
-            <p className="muted">황혼의 수도, 카르멘 성문 앞</p>
-            <div className="card-footer"><div className="party" aria-label="플레이어 4명"><i>엘</i><i>카</i><i>린</i><i>＋1</i></div><Link className="text-button" href="/room">계속하기 →</Link></div>
+            <p className="eyebrow">{room.game_system}</p><h2>{room.name}</h2>
+            <p className="muted">{room.description || "설명이 없습니다."}</p>
+            <div className="card-footer"><span /><Link className="text-button" href={`/room?roomId=${room.id}`}>열기 →</Link></div>
           </div>
-        </article>
-        <article className="campaign-card">
-          <div className="card-art forest-art"><span>휴식 중</span></div>
-          <div className="card-body">
-            <p className="eyebrow">CALL OF CTHULHU · 3회차</p><h2>안개 아래의 마을</h2>
-            <p className="muted">2026년 9월 6일 마지막 플레이</p>
-            <div className="card-footer"><div className="party" aria-label="플레이어 3명"><i>유</i><i>한</i><i>민</i></div><Link className="text-button" href="/room">열기 →</Link></div>
-          </div>
-        </article>
+        </article>)}
         <Link className="campaign-card new-card" href="/room/create"><span className="new-card-icon">＋</span><strong>새 캠페인 만들기</strong><span>빈 테이블에서 시작</span></Link>
       </section>
       <footer className="lobby-footer">ELLIMIUM · PERSONAL VIRTUAL TABLETOP</footer>
-    </main></AuthGuard>
+    </main>
   );
 }
