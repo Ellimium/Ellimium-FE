@@ -114,6 +114,7 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
         return;
       }
       setSheets((current) => [...current, data as CharacterSheet]);
+      window.dispatchEvent(new CustomEvent("character-sheet-created", { detail: { roomId, character: { id: data.id, name: data.name } } }));
       formElement.reset();
       setSystem("dnd_5e");
       setMessage("캐릭터 시트를 생성했습니다.");
