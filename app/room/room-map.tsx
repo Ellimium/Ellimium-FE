@@ -155,8 +155,16 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       setLoading(false);
     }
 
+    function refresh(event: Event) {
+      if ((event as CustomEvent<string>).detail === roomId) void load();
+    }
+
+    window.addEventListener("room-map-registered", refresh);
     void load();
-    return () => { active = false; };
+    return () => {
+      active = false;
+      window.removeEventListener("room-map-registered", refresh);
+    };
   }, [roomId]);
 
   useEffect(() => { setMapSize(null); }, [selectedId]);

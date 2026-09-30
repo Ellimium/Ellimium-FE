@@ -98,6 +98,7 @@ export default function MapRegistration({ roomId }: { roomId?: string }) {
         setError("맵을 등록할 수 없습니다. 마스터 권한과 소유한 맵 자산을 확인하세요.");
         return;
       }
+      window.dispatchEvent(new CustomEvent("room-map-registered", { detail: roomId }));
       setMessage("룸 맵을 등록했습니다.");
     } catch {
       setError("맵 서버에 연결하지 못했습니다. 저장 여부를 확인한 뒤 다시 시도하세요.");
