@@ -103,6 +103,18 @@ export default function Chat({ roomId }: { roomId?: string }) {
   useEffect(() => {
     if (!roomId) return;
 
+    function addCharacter(event: Event) {
+      const created = (event as CustomEvent<{ roomId: string; character: Character }>).detail;
+      if (created.roomId === roomId) setCharacters((current) => current.some(({ id }) => id === created.character.id) ? current : [...current, created.character]);
+    }
+
+    window.addEventListener("character-sheet-created", addCharacter);
+    return () => window.removeEventListener("character-sheet-created", addCharacter);
+  }, [roomId]);
+
+  useEffect(() => {
+    if (!roomId) return;
+
     let active = true;
     setConnected(false);
     const channel = supabase
