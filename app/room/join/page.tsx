@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 
+import { getLoginHref } from "@/app/login/return-path";
 import { supabase } from "@/lib/supabase/client";
 
 export default function JoinRoom() {
@@ -68,7 +69,7 @@ export default function JoinRoom() {
       <Link className="brand" href="/">ELLIMIUM</Link>
       <div className="profile-heading"><p className="eyebrow">ROOM INVITATION</p><h1>등록 계정으로<br />로그인하세요.</h1></div>
       <p className="muted">룸 참가에는 이메일로 가입한 Ellimium 계정이 필요합니다. 익명 로그인은 사용할 수 없습니다.</p>
-      <Link className="primary-button full-button" href="/login">등록 계정으로 로그인</Link>
+      <Link className="primary-button full-button" href={getLoginHref(code)}>등록 계정으로 로그인</Link>
       <p className="form-foot"><Link href="/">← 캠페인으로 돌아가기</Link></p>
     </section></main>;
   }

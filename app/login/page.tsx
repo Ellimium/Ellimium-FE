@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
+import { getSafeReturnPath } from "./return-path";
 
 export default function Login() {
   const router = useRouter();
@@ -32,7 +33,8 @@ export default function Login() {
       if (result.error) {
         setError(result.error.message);
       } else if (result.data.session) {
-        router.replace("/");
+        const returnTo = getSafeReturnPath(new URLSearchParams(window.location.search).get("returnTo"));
+        router.replace(returnTo);
         router.refresh();
       } else {
         setMessage("확인 이메일의 링크를 열어 가입을 완료하세요.");
