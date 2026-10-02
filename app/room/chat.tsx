@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 
-import { canSendChat, CHAT_MESSAGE_LIMIT, limitChatContent, mergeChatMessages, messageParts } from "./chat-message";
+import { canSendChat, CHAT_MESSAGE_LIMIT, limitChatContent, mergeChatMessages, messageParts, systemMessageDisplay, visibleChatMessages } from "./chat-message";
 import type { ChatMessage, ChatMode } from "./chat-message";
 import { supabase } from "@/lib/supabase/client";
 
@@ -11,7 +11,7 @@ type Member = { user_id: string; role: Role };
 type Profile = { user_id: string; nickname: string };
 type Character = { id: string; name: string };
 
-const MESSAGE_FIELDS = "id, room_id, sender_id, character_id, character_name, mode, content, created_at";
+const MESSAGE_FIELDS = "id, room_id, sender_id, character_id, character_name, mode, content, message_type, event_type, event_data, created_at";
 const MODE_NAMES: Record<ChatMode, string> = { general: "일반", ic: "IC", ooc: "OOC" };
 const dateTime = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
 
@@ -26,6 +26,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
   const [loading, setLoading] = useState(Boolean(roomId));
   const [sending, setSending] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [showSystemMessages, setShowSystemMessages] = useState(true);
   const [error, setError] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const senderNamesRef = useRef<Record<string, string>>({});
@@ -129,7 +130,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
         if (!message.id || message.room_id !== roomId) return;
 
         setMessages((current) => mergeChatMessages(current, message));
-        if (!senderNamesRef.current[message.sender_id]) void supabase
+        if (message.sender_id && !senderNamesRef.current[message.sender_id]) void supabase
           .from("profiles")
           .select("user_id, nickname")
           .eq("user_id", message.sender_id)
@@ -157,6 +158,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
   }, [messages]);
 
   const canSend = canSendChat(role);
+  const visibleMessages = visibleChatMessages(messages, showSystemMessages);
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -195,12 +197,20 @@ export default function Chat({ roomId }: { roomId?: string }) {
   if (!roomId) return null;
 
   return <section className="chat-panel realtime-chat" aria-label="실시간 채팅" aria-busy={loading || sending}>
-    <div className="panel-tabs"><span className="active">채팅</span><span className={connected ? "chat-connected" : ""}>{connected ? "실시간 연결됨" : "연결 중"}</span></div>
+    <div className="panel-tabs"><span className="active">채팅</span><button className={showSystemMessages ? "active" : ""} type="button" aria-pressed={showSystemMessages} onClick={() => setShowSystemMessages((current) => !current)}>{showSystemMessages ? "시스템 숨기기" : "시스템 보기"}</button><span className={connected ? "chat-connected" : ""}>{connected ? "실시간 연결됨" : "연결 중"}</span></div>
     <div className="messages chat-messages" ref={listRef} role="log" aria-live="polite" aria-relevant="additions">
       {loading && <p className="system-message">채팅 기록을 불러오는 중…</p>}
-      {!loading && !messages.length && <p className="system-message">첫 메시지를 보내 대화를 시작하세요.</p>}
-      {messages.map((message) => {
-        const senderName = senderNames[message.sender_id] ?? "알 수 없는 사용자";
+      {!loading && !visibleMessages.length && <p className="system-message">{messages.length ? "시스템 메시지가 숨겨져 있습니다." : "첫 메시지를 보내 대화를 시작하세요."}</p>}
+      {visibleMessages.map((message) => {
+        const senderName = message.sender_id ? senderNames[message.sender_id] ?? "알 수 없는 사용자" : "시스템";
+        if (message.message_type === "system") {
+          const display = systemMessageDisplay(message, senderName);
+          return <article className={`chat-system-message chat-system-message-${message.event_type ?? "unknown"}`} key={message.id}>
+            <header><strong>{display.label}</strong><time dateTime={message.created_at}>{dateTime.format(new Date(message.created_at))}</time></header>
+            <p>{display.text}</p>
+          </article>;
+        }
+
         return <article className={`message chat-message chat-message-${message.mode}`} key={message.id}>
           <header><strong>{message.character_name ?? senderName}</strong><span>{MODE_NAMES[message.mode]}{message.character_name ? ` · ${senderName}` : ""}</span><time dateTime={message.created_at}>{dateTime.format(new Date(message.created_at))}</time></header>
           <p>{messageParts(message.content).map((part, index) => part.type === "link"
