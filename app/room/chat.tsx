@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 
-import { canSendChat, CHAT_MESSAGE_LIMIT, limitChatContent, mergeChatMessages, messageParts, systemMessageDisplay } from "./chat-message";
+import { canSendChat, CHAT_MESSAGE_LIMIT, limitChatContent, mergeChatMessages, messageParts, systemMessageDisplay, visibleChatMessages } from "./chat-message";
 import type { ChatMessage, ChatMode } from "./chat-message";
 import { supabase } from "@/lib/supabase/client";
 
@@ -26,6 +26,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
   const [loading, setLoading] = useState(Boolean(roomId));
   const [sending, setSending] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [showSystemMessages, setShowSystemMessages] = useState(true);
   const [error, setError] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const senderNamesRef = useRef<Record<string, string>>({});
@@ -157,6 +158,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
   }, [messages]);
 
   const canSend = canSendChat(role);
+  const visibleMessages = visibleChatMessages(messages, showSystemMessages);
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -195,11 +197,11 @@ export default function Chat({ roomId }: { roomId?: string }) {
   if (!roomId) return null;
 
   return <section className="chat-panel realtime-chat" aria-label="실시간 채팅" aria-busy={loading || sending}>
-    <div className="panel-tabs"><span className="active">채팅</span><span className={connected ? "chat-connected" : ""}>{connected ? "실시간 연결됨" : "연결 중"}</span></div>
+    <div className="panel-tabs"><span className="active">채팅</span><button className={showSystemMessages ? "active" : ""} type="button" aria-pressed={showSystemMessages} onClick={() => setShowSystemMessages((current) => !current)}>{showSystemMessages ? "시스템 숨기기" : "시스템 보기"}</button><span className={connected ? "chat-connected" : ""}>{connected ? "실시간 연결됨" : "연결 중"}</span></div>
     <div className="messages chat-messages" ref={listRef} role="log" aria-live="polite" aria-relevant="additions">
       {loading && <p className="system-message">채팅 기록을 불러오는 중…</p>}
-      {!loading && !messages.length && <p className="system-message">첫 메시지를 보내 대화를 시작하세요.</p>}
-      {messages.map((message) => {
+      {!loading && !visibleMessages.length && <p className="system-message">{messages.length ? "시스템 메시지가 숨겨져 있습니다." : "첫 메시지를 보내 대화를 시작하세요."}</p>}
+      {visibleMessages.map((message) => {
         const senderName = message.sender_id ? senderNames[message.sender_id] ?? "알 수 없는 사용자" : "시스템";
         if (message.message_type === "system") {
           const display = systemMessageDisplay(message, senderName);

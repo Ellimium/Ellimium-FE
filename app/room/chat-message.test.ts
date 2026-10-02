@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { canSendChat, limitChatContent, mergeChatMessages, messageParts, systemMessageDisplay } from "./chat-message.ts";
+import { canSendChat, limitChatContent, mergeChatMessages, messageParts, systemMessageDisplay, visibleChatMessages } from "./chat-message.ts";
 import type { ChatMessage } from "./chat-message.ts";
 
 const message = (id: string, created_at: string): ChatMessage => ({
@@ -61,4 +61,12 @@ test("시스템 이벤트별 채팅 표시를 만든다", () => {
   assert.deepEqual(systemMessageDisplay(systemMessage("member_joined", { user_id: "user" }), "모험가"), { label: "입장", text: "모험가님이 룸에 입장했습니다." });
   assert.deepEqual(systemMessageDisplay(systemMessage("member_left", { user_id: "user" }), "알 수 없는 사용자"), { label: "퇴장", text: "참가자님이 룸에서 퇴장했습니다." });
   assert.deepEqual(systemMessageDisplay(systemMessage("notification", { created_by: "master" }, "잠시 후 시작합니다."), "마스터"), { label: "알림", text: "잠시 후 시작합니다." });
+});
+
+test("시스템 메시지 표시 여부로 채팅을 필터링한다", () => {
+  const systemMessage = { ...message("system", "2026-10-02T00:00:00Z"), message_type: "system" as const };
+  const messages = [message("chat", "2026-10-02T00:00:01Z"), systemMessage];
+
+  assert.deepEqual(visibleChatMessages(messages, true).map(({ id }) => id), ["chat", "system"]);
+  assert.deepEqual(visibleChatMessages(messages, false).map(({ id }) => id), ["chat"]);
 });

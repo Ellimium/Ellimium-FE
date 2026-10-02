@@ -47,6 +47,10 @@ export function mergeChatMessages(current: ChatMessage[], incoming: ChatMessage 
     Date.parse(left.created_at) - Date.parse(right.created_at) || left.id.localeCompare(right.id));
 }
 
+export function visibleChatMessages(messages: ChatMessage[], showSystemMessages: boolean) {
+  return showSystemMessages ? messages : messages.filter((message) => message.message_type !== "system");
+}
+
 export function systemMessageDisplay(message: ChatMessage, senderName: string) {
   const actor = senderName === "알 수 없는 사용자" ? "참가자" : senderName;
   const data = message.event_data ?? {};
