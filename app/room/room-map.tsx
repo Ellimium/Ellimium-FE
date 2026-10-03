@@ -4,6 +4,7 @@ import { FormEvent, KeyboardEvent, PointerEvent, useEffect, useRef, useState } f
 
 import { assetImagePaths, type Asset } from "../assets/asset-images";
 import { supabase } from "@/lib/supabase/client";
+import { hideArea, rectangleFromPoints, type VisibilityArea } from "./map-visibility";
 import { gridCoordinate, mapPointFromClient } from "./token-position";
 
 type Role = "master" | "player" | "spectator";
@@ -13,6 +14,7 @@ type RoomMapRow = {
   grid_cell_size: number | null;
   grid_offset_x: number | null;
   grid_offset_y: number | null;
+  fog_enabled: boolean;
 };
 type RoomTokenRow = {
   id: string;
@@ -29,6 +31,15 @@ type DisplayToken = RoomTokenRow & { imageUrl?: string };
 type TokenAsset = Pick<Asset, "id" | "storage_path">;
 type PlayerOption = { userId: string; nickname: string };
 type DragState = { tokenId: string; pointerId: number; offsetX: number; offsetY: number; startX: number; startY: number };
+type VisibilityRow = {
+  id: string;
+  map_id: string;
+  room_member_id: string | null;
+  scope: "all" | "member";
+  inherits_common: boolean;
+  revealed_areas: VisibilityArea[];
+};
+type FogDrag = { pointerId: number; start: { x: number; y: number }; current: { x: number; y: number } };
 
 export default function RoomMap({ roomId }: { roomId?: string }) {
   const [maps, setMaps] = useState<DisplayMap[]>([]);
@@ -44,6 +55,12 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [dragging, setDragging] = useState<DragState | null>(null);
+  const [visibilityRows, setVisibilityRows] = useState<VisibilityRow[]>([]);
+  const [visibilityTarget, setVisibilityTarget] = useState("all");
+  const [fogMode, setFogMode] = useState<"reveal" | "hide">("reveal");
+  const [fogDragging, setFogDragging] = useState<FogDrag | null>(null);
+  const [fogEditing, setFogEditing] = useState(false);
+  const [fogBusy, setFogBusy] = useState(false);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   useEffect(() => {
@@ -64,7 +81,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       }
 
       const [{ data: roomMaps, error: roomMapError }, { data: members, error: memberError }] = await Promise.all([
-        supabase.from("room_maps").select("id, asset_id, grid_cell_size, grid_offset_x, grid_offset_y").eq("room_id", roomId).order("created_at"),
+        supabase.from("room_maps").select("id, asset_id, grid_cell_size, grid_offset_x, grid_offset_y, fog_enabled").eq("room_id", roomId).order("created_at"),
         supabase.from("room_members").select("user_id, role").eq("room_id", roomId).eq("status", "active"),
       ]);
 
@@ -80,7 +97,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       const playerIds = memberList.filter((member) => member.role === "player").map((member) => member.user_id);
       const mapList = (roomMaps ?? []) as RoomMapRow[];
 
-      const [{ data: profiles, error: profileError }, { data: ownedTokenAssets, error: tokenAssetError }, { data: roomTokens, error: tokenError }] = await Promise.all([
+      const [{ data: profiles, error: profileError }, { data: ownedTokenAssets, error: tokenAssetError }, { data: roomTokens, error: tokenError }, { data: mapVisibility, error: visibilityError }] = await Promise.all([
         playerIds.length
           ? supabase.from("profiles").select("user_id, nickname").in("user_id", playerIds)
           : Promise.resolve({ data: [], error: null }),
@@ -90,11 +107,14 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         mapList.length
           ? supabase.from("room_tokens").select("id, map_id, owner_id, image_asset_id, name, x, y, size").in("map_id", mapList.map((map) => map.id)).order("created_at")
           : Promise.resolve({ data: [], error: null }),
+        mapList.length
+          ? supabase.from("map_visibility").select("id, map_id, room_member_id, scope, inherits_common, revealed_areas").in("map_id", mapList.map((map) => map.id))
+          : Promise.resolve({ data: [], error: null }),
       ]);
 
       if (!active) return;
-      if (profileError || tokenAssetError || tokenError) {
-        setError("토큰 정보를 불러올 수 없습니다.");
+      if (profileError || tokenAssetError || tokenError || visibilityError) {
+        setError("토큰과 시야 정보를 불러올 수 없습니다.");
         setLoading(false);
         return;
       }
@@ -150,6 +170,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         const asset = token.image_asset_id ? assetsById.get(token.image_asset_id) : undefined;
         return { ...token, imageUrl: asset ? urls.get(asset.storage_path) ?? undefined : undefined };
       }));
+      setVisibilityRows((mapVisibility ?? []) as VisibilityRow[]);
       setMaps(nextMaps);
       setSelectedId((current) => nextMaps.some((map) => map.id === current) ? current : nextMaps[0]?.id ?? "");
       setLoading(false);
@@ -168,6 +189,10 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }, [roomId]);
 
   useEffect(() => { setMapSize(null); }, [selectedId]);
+
+  useEffect(() => {
+    if (visibilityTarget !== "all" && !players.some((player) => player.userId === visibilityTarget)) setVisibilityTarget("all");
+  }, [players, visibilityTarget]);
 
   useEffect(() => {
     if (!roomId || !maps.length) return;
@@ -218,6 +243,26 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       void supabase.removeChannel(channel);
     };
   }, [maps, roomId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const channel = supabase
+      .channel(`map-visibility:${selectedId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "map_visibility", filter: `map_id=eq.${selectedId}` }, ({ new: next }) => {
+        const row = next as VisibilityRow;
+        if (!row.id) return;
+        setVisibilityRows((current) => [...current.filter(({ id }) => id !== row.id), row]);
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "room_maps", filter: `id=eq.${selectedId}` }, ({ new: next }) => {
+        if (typeof next.fog_enabled !== "boolean") return;
+        setMaps((current) => current.map((map) => map.id === selectedId ? { ...map, fog_enabled: next.fog_enabled as boolean } : map));
+      })
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR") setError("맵 시야 실시간 채널에 연결할 수 없습니다.");
+      });
+
+    return () => { void supabase.removeChannel(channel); };
+  }, [selectedId]);
 
   function broadcastPosition(tokenId: string, x: number, y: number) {
     void channelRef.current?.send({ type: "broadcast", event: "token-move", payload: { token_id: tokenId, x, y } });
@@ -359,6 +404,96 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     }
   }
 
+  async function setFogEnabled(enabled: boolean) {
+    if (!selected || role !== "master") return;
+    setFogBusy(true);
+    setError("");
+    const { error: fogError } = await supabase.rpc("set_map_fog_enabled", {
+      target_map_id: selected.id,
+      new_fog_enabled: enabled,
+    });
+    if (fogError) setError("Fog 상태를 변경할 수 없습니다.");
+    else setMaps((current) => current.map((map) => map.id === selected.id ? { ...map, fog_enabled: enabled } : map));
+    setFogBusy(false);
+  }
+
+  function targetRow(mapId: string, target: string) {
+    return visibilityRows.find((row) => row.map_id === mapId && (target === "all" ? row.scope === "all" : row.room_member_id === target));
+  }
+
+  function visibleAreas(mapId: string, target: string) {
+    const common = targetRow(mapId, "all")?.revealed_areas ?? [];
+    if (target === "all") return common;
+    const personal = targetRow(mapId, target);
+    return !personal || personal.inherits_common ? common : personal.revealed_areas;
+  }
+
+  async function saveVisibility(areas: VisibilityArea[]) {
+    if (!selected || role !== "master") return;
+    setFogBusy(true);
+    setError("");
+    const existing = targetRow(selected.id, visibilityTarget);
+    const query = existing
+      ? supabase.from("map_visibility").update({ revealed_areas: areas, inherits_common: false }).eq("id", existing.id)
+      : supabase.from("map_visibility").insert({
+        map_id: selected.id,
+        room_member_id: visibilityTarget === "all" ? null : visibilityTarget,
+        scope: visibilityTarget === "all" ? "all" : "member",
+        revealed_areas: areas,
+      });
+    const { data, error: visibilityError } = await query
+      .select("id, map_id, room_member_id, scope, inherits_common, revealed_areas")
+      .single();
+    if (visibilityError || !data) setError("맵 시야 영역을 저장할 수 없습니다.");
+    else setVisibilityRows((current) => [...current.filter(({ id }) => id !== data.id), data as VisibilityRow]);
+    setFogBusy(false);
+  }
+
+  async function restoreCommonVisibility() {
+    if (!selected || visibilityTarget === "all") return;
+    const existing = targetRow(selected.id, visibilityTarget);
+    if (!existing) return;
+    setFogBusy(true);
+    setError("");
+    const { data, error: visibilityError } = await supabase.from("map_visibility")
+      .update({ inherits_common: true })
+      .eq("id", existing.id)
+      .select("id, map_id, room_member_id, scope, inherits_common, revealed_areas")
+      .single();
+    if (visibilityError || !data) setError("플레이어 시야를 공통 영역으로 되돌릴 수 없습니다.");
+    else setVisibilityRows((current) => [...current.filter(({ id }) => id !== data.id), data as VisibilityRow]);
+    setFogBusy(false);
+  }
+
+  function fogPoint(event: PointerEvent<SVGRectElement>) {
+    if (!mapSize) return null;
+    const svg = event.currentTarget.ownerSVGElement;
+    return svg ? mapPointFromClient(event.clientX, event.clientY, svg.getBoundingClientRect(), mapSize) : null;
+  }
+
+  function startFogDrag(event: PointerEvent<SVGRectElement>) {
+    const point = fogPoint(event);
+    if (!point || fogBusy) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setFogDragging({ pointerId: event.pointerId, start: point, current: point });
+  }
+
+  function moveFogDrag(event: PointerEvent<SVGRectElement>) {
+    if (!fogDragging || event.pointerId !== fogDragging.pointerId) return;
+    const point = fogPoint(event);
+    if (point) setFogDragging((current) => current ? { ...current, current: point } : null);
+  }
+
+  function finishFogDrag(event: PointerEvent<SVGRectElement>) {
+    if (!selected || !mapSize || !fogDragging || event.pointerId !== fogDragging.pointerId) return;
+    const area = rectangleFromPoints(fogDragging.start, fogPoint(event) ?? fogDragging.current, mapSize);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setFogDragging(null);
+    if (!area) return;
+    const current = visibleAreas(selected.id, visibilityTarget);
+    void saveVisibility(fogMode === "reveal" ? [...current, area] : hideArea(current, area));
+  }
+
   const selected = maps.find((map) => map.id === selectedId);
   const selectedTokens = tokens.filter((token) => token.map_id === selectedId);
   // ponytail: 그리드 미설정 맵은 50px 셀로 표시하며 자유 배치가 필요해지면 픽셀 좌표 모드를 분리한다.
@@ -366,6 +501,11 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const offsetX = selected?.grid_offset_x ?? 0;
   const offsetY = selected?.grid_offset_y ?? 0;
   const permissionText = role === "master" ? "모든 토큰 조작" : role === "player" ? "내 토큰 조작" : "조회 전용";
+  const audience = role === "master" ? visibilityTarget : role === "player" ? currentUserId : "all";
+  const revealedAreas = selected ? visibleAreas(selected.id, audience) : [];
+  const previewArea = fogDragging && mapSize ? rectangleFromPoints(fogDragging.start, fogDragging.current, mapSize) : null;
+  const maskId = selected ? `fog-visible-${selected.id}` : "fog-visible";
+  const overlayMaskId = selected ? `fog-overlay-${selected.id}` : "fog-overlay";
 
   return <>
     <div className="battle-map" aria-busy={loading}>
@@ -383,14 +523,19 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         onPointerUp={finishDrag}
         onPointerCancel={cancelDrag}
       >
-        <image href={selected.mapUrl} width={mapSize.width} height={mapSize.height} />
-        {selectedTokens.map((token) => {
+        <defs>
+          <mask id={maskId}><rect width={mapSize.width} height={mapSize.height} fill="black" />{revealedAreas.map((area, index) => <rect key={index} {...area} fill="white" />)}</mask>
+          <mask id={overlayMaskId}><rect width={mapSize.width} height={mapSize.height} fill="white" />{revealedAreas.map((area, index) => <rect key={index} {...area} fill="black" />)}</mask>
+        </defs>
+        <g mask={selected.fog_enabled && role !== "master" ? `url(#${maskId})` : undefined}>
+          <image href={selected.mapUrl} width={mapSize.width} height={mapSize.height} />
+          {selectedTokens.map((token) => {
           const tokenSize = Number(token.size) * cellSize;
           const x = offsetX + Number(token.x) * cellSize;
           const y = offsetY + Number(token.y) * cellSize;
           const controllable = role === "master" || (role === "player" && token.owner_id === currentUserId);
           const className = `map-token${controllable ? " token-controllable" : ""}${dragging?.tokenId === token.id ? " token-dragging" : ""}`;
-          return <g
+            return <g
             className={className}
             key={token.id}
             transform={`translate(${x} ${y})`}
@@ -406,10 +551,32 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
               : <><rect width={tokenSize} height={tokenSize} /><text className="token-initial" x={tokenSize / 2} y={tokenSize / 2}>{token.name.slice(0, 1)}</text></>}
             <rect className="token-outline" width={tokenSize} height={tokenSize} />
             <text className="token-label" x={tokenSize / 2} y={tokenSize + Math.max(14, cellSize * .25)}>{token.name}</text>
-          </g>;
-        })}
+            </g>;
+          })}
+        </g>
+        {selected.fog_enabled && role === "master" && <rect className="fog-overlay" width={mapSize.width} height={mapSize.height} mask={`url(#${overlayMaskId})`} />}
+        {selected.fog_enabled && role === "master" && fogEditing && <rect
+          className="fog-interaction"
+          width={mapSize.width}
+          height={mapSize.height}
+          onPointerDown={startFogDrag}
+          onPointerMove={moveFogDrag}
+          onPointerUp={finishFogDrag}
+          onPointerCancel={() => setFogDragging(null)}
+        />}
+        {previewArea && <rect className={`fog-preview fog-preview-${fogMode}`} {...previewArea} />}
       </svg>}
       {selected && <span className="token-permission">{permissionText}</span>}
+      {selected && role === "master" && <details className="fog-controls" onToggle={(event) => setFogEditing(event.currentTarget.open)}>
+        <summary>Fog of War</summary>
+        <div aria-busy={fogBusy}>
+          <button type="button" disabled={fogBusy} onClick={() => void setFogEnabled(!selected.fog_enabled)}>{selected.fog_enabled ? "Fog 끄기" : "Fog 켜기"}</button>
+          <label>대상<select value={visibilityTarget} disabled={fogBusy} onChange={(event) => setVisibilityTarget(event.target.value)}><option value="all">전체 플레이어</option>{players.map((player) => <option key={player.userId} value={player.userId}>{player.nickname}</option>)}</select></label>
+          <fieldset><legend>드래그 동작</legend><label><input type="radio" name="fogMode" checked={fogMode === "reveal"} onChange={() => setFogMode("reveal")} />공개</label><label><input type="radio" name="fogMode" checked={fogMode === "hide"} onChange={() => setFogMode("hide")} />가리기</label></fieldset>
+          {visibilityTarget !== "all" && <button type="button" disabled={fogBusy || !targetRow(selected.id, visibilityTarget) || targetRow(selected.id, visibilityTarget)?.inherits_common} onClick={() => void restoreCommonVisibility()}>공통 시야 사용</button>}
+          <small>{selected.fog_enabled ? "맵을 드래그해 영역을 변경하세요." : "영역을 편집하려면 Fog를 켜세요."}</small>
+        </div>
+      </details>}
       {selected && role === "master" && <details className="token-creator">
         <summary>토큰 추가</summary>
         <form onSubmit={createToken} aria-busy={busy}>
