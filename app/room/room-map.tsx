@@ -4,6 +4,16 @@ import { FormEvent, KeyboardEvent, PointerEvent, useEffect, useRef, useState } f
 
 import { assetImagePaths, type Asset } from "../assets/asset-images";
 import { supabase } from "@/lib/supabase/client";
+import MapDrawingShape from "./map-drawing-shape";
+import {
+  canEditMapDrawing,
+  createDrawingDraft,
+  DRAWING_TYPES,
+  drawingPointFromClient,
+  type DrawingPoint,
+  type DrawingType,
+  type MapDrawing,
+} from "./map-drawing";
 import { hideArea, rectangleFromPoints, type VisibilityArea } from "./map-visibility";
 import { useRoomPermissions } from "./room-permissions";
 import { gridCoordinate, mapPointFromClient } from "./token-position";
@@ -41,6 +51,15 @@ type VisibilityRow = {
   revealed_areas: VisibilityArea[];
 };
 type FogDrag = { pointerId: number; start: { x: number; y: number }; current: { x: number; y: number } };
+type DrawingDrag = { pointerId: number; points: DrawingPoint[] };
+
+const DRAWING_LABELS: Record<DrawingType, string> = {
+  line: "선",
+  circle: "원",
+  rectangle: "사각형",
+  freehand: "브러시",
+  text: "텍스트",
+};
 
 export default function RoomMap({ roomId }: { roomId?: string }) {
   const { canUse, loading: permissionLoading } = useRoomPermissions();
@@ -52,6 +71,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const [players, setPlayers] = useState<PlayerOption[]>([]);
   const [currentUserId, setCurrentUserId] = useState("");
   const [role, setRole] = useState<Role | null>(null);
+  const canDraw = canEditMapDrawing(canViewMap, canUse("drawing"), role);
   const [selectedId, setSelectedId] = useState("");
   const [mapSize, setMapSize] = useState<{ width: number; height: number } | null>(null);
   const [loading, setLoading] = useState(Boolean(roomId));
@@ -65,6 +85,15 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const [fogDragging, setFogDragging] = useState<FogDrag | null>(null);
   const [fogEditing, setFogEditing] = useState(false);
   const [fogBusy, setFogBusy] = useState(false);
+  const [drawings, setDrawings] = useState<MapDrawing[]>([]);
+  const [drawingType, setDrawingType] = useState<DrawingType>("freehand");
+  const [drawingColor, setDrawingColor] = useState("#E0B45B");
+  const [drawingStrokeWidth, setDrawingStrokeWidth] = useState(4);
+  const [drawingText, setDrawingText] = useState("");
+  const [drawingEditing, setDrawingEditing] = useState(false);
+  const [drawingDrag, setDrawingDrag] = useState<DrawingDrag | null>(null);
+  const [selectedDrawingId, setSelectedDrawingId] = useState("");
+  const [drawingBusy, setDrawingBusy] = useState(false);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   useEffect(() => {
@@ -80,6 +109,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       setTokens([]);
       setTokenAssets([]);
       setVisibilityRows([]);
+      setDrawings([]);
       setSelectedId("");
       setMapSize(null);
       setDragging(null);
@@ -208,6 +238,11 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   useEffect(() => { setMapSize(null); }, [selectedId]);
 
   useEffect(() => {
+    setSelectedDrawingId("");
+    setDrawingDrag(null);
+  }, [selectedId]);
+
+  useEffect(() => {
     if (visibilityTarget !== "all" && !players.some((player) => player.userId === visibilityTarget)) setVisibilityTarget("all");
   }, [players, visibilityTarget]);
 
@@ -258,6 +293,55 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       active = false;
       channelRef.current = null;
       void supabase.removeChannel(channel);
+    };
+  }, [canViewMap, maps, roomId]);
+
+  useEffect(() => {
+    if (!roomId || !canViewMap || !maps.length) {
+      setDrawings([]);
+      return;
+    }
+
+    let active = true;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    const mapIds = maps.map((map) => map.id);
+
+    async function refreshDrawings() {
+      const { data, error: drawingError } = await supabase
+        .from("room_map_drawings")
+        .select("id, map_id, drawing_type, geometry, text_content, color, stroke_width, created_at, updated_at")
+        .in("map_id", mapIds)
+        .order("created_at");
+      if (!active) return;
+      if (drawingError) {
+        setError("맵 그림을 불러올 수 없습니다.");
+        return;
+      }
+      setDrawings((data ?? []) as MapDrawing[]);
+    }
+
+    async function subscribe() {
+      try {
+        await supabase.realtime.setAuth();
+        if (!active) return;
+        channel = supabase.channel(`room:${roomId}:drawings`, { config: { private: true } });
+        for (const event of ["INSERT", "UPDATE", "DELETE"] as const) {
+          channel.on("broadcast", { event }, () => { void refreshDrawings(); });
+        }
+        channel.subscribe((status) => {
+          if (status === "SUBSCRIBED") void refreshDrawings();
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setError("그리기 실시간 채널에 연결할 수 없습니다.");
+        });
+      } catch {
+        if (active) setError("그리기 실시간 채널에 연결할 수 없습니다.");
+      }
+    }
+
+    void refreshDrawings();
+    void subscribe();
+    return () => {
+      active = false;
+      if (channel) void supabase.removeChannel(channel);
     };
   }, [canViewMap, maps, roomId]);
 
@@ -513,8 +597,121 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     void saveVisibility(fogMode === "reveal" ? [...current, area] : hideArea(current, area));
   }
 
+  function drawingPoint(event: PointerEvent<SVGRectElement>) {
+    if (!mapSize) return null;
+    const svg = event.currentTarget.ownerSVGElement;
+    return svg ? drawingPointFromClient(event.clientX, event.clientY, svg.getBoundingClientRect(), mapSize) : null;
+  }
+
+  async function createDrawing(points: DrawingPoint[]) {
+    if (!selected || !canDraw) return;
+    const draft = createDrawingDraft(
+      drawingType,
+      points,
+      { color: drawingColor, strokeWidth: drawingStrokeWidth },
+      drawingText,
+    );
+    if (!draft) {
+      setError(drawingType === "text" ? "텍스트를 입력한 뒤 맵을 선택하세요." : "그리려는 영역을 조금 더 크게 지정하세요.");
+      return;
+    }
+
+    setDrawingBusy(true);
+    setError("");
+    try {
+      const { data, error: insertError } = await supabase
+        .from("room_map_drawings")
+        .insert({ map_id: selected.id, ...draft })
+        .select("id, map_id, drawing_type, geometry, text_content, color, stroke_width, created_at, updated_at")
+        .single();
+      if (insertError || !data) setError("그림을 저장할 수 없습니다.");
+      else {
+        setDrawings((current) => [...current.filter(({ id }) => id !== data.id), data as MapDrawing]);
+        setSelectedDrawingId(data.id);
+        if (drawingType === "text") setDrawingText("");
+      }
+    } catch {
+      setError("그림 서버에 연결할 수 없습니다.");
+    } finally {
+      setDrawingBusy(false);
+    }
+  }
+
+  function startDrawing(event: PointerEvent<SVGRectElement>) {
+    if (!canDraw || drawingBusy) return;
+    const point = drawingPoint(event);
+    if (!point) return;
+    if (drawingType === "text") {
+      void createDrawing([point]);
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDrawingDrag({ pointerId: event.pointerId, points: [point] });
+    setSelectedDrawingId("");
+  }
+
+  function moveDrawing(event: PointerEvent<SVGRectElement>) {
+    if (!drawingDrag || event.pointerId !== drawingDrag.pointerId) return;
+    const point = drawingPoint(event);
+    if (!point) return;
+    setDrawingDrag((current) => current ? {
+      ...current,
+      points: drawingType === "freehand" ? [...current.points, point] : [current.points[0], point],
+    } : null);
+  }
+
+  function finishDrawing(event: PointerEvent<SVGRectElement>) {
+    if (!drawingDrag || event.pointerId !== drawingDrag.pointerId) return;
+    const point = drawingPoint(event);
+    const points = point
+      ? drawingType === "freehand" ? [...drawingDrag.points, point] : [drawingDrag.points[0], point]
+      : drawingDrag.points;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setDrawingDrag(null);
+    void createDrawing(points);
+  }
+
+  async function updateSelectedDrawing() {
+    if (!canDraw || !selectedDrawingId) return;
+    setDrawingBusy(true);
+    setError("");
+    try {
+      const { data, error: updateError } = await supabase
+        .from("room_map_drawings")
+        .update({ color: drawingColor, stroke_width: drawingStrokeWidth })
+        .eq("id", selectedDrawingId)
+        .select("id, map_id, drawing_type, geometry, text_content, color, stroke_width, created_at, updated_at")
+        .single();
+      if (updateError || !data) setError("그림 스타일을 변경할 수 없습니다.");
+      else setDrawings((current) => current.map((drawing) => drawing.id === data.id ? data as MapDrawing : drawing));
+    } catch {
+      setError("그림 서버에 연결할 수 없습니다.");
+    } finally {
+      setDrawingBusy(false);
+    }
+  }
+
+  async function deleteSelectedDrawing() {
+    if (!canDraw || !selectedDrawingId) return;
+    setDrawingBusy(true);
+    setError("");
+    try {
+      const { error: deleteError } = await supabase.from("room_map_drawings").delete().eq("id", selectedDrawingId);
+      if (deleteError) setError("그림을 삭제할 수 없습니다.");
+      else {
+        setDrawings((current) => current.filter(({ id }) => id !== selectedDrawingId));
+        setSelectedDrawingId("");
+      }
+    } catch {
+      setError("그림 서버에 연결할 수 없습니다.");
+    } finally {
+      setDrawingBusy(false);
+    }
+  }
+
   const selected = maps.find((map) => map.id === selectedId);
   const selectedTokens = tokens.filter((token) => token.map_id === selectedId);
+  const selectedDrawings = drawings.filter((drawing) => drawing.map_id === selectedId);
   // ponytail: 그리드 미설정 맵은 50px 셀로 표시하며 자유 배치가 필요해지면 픽셀 좌표 모드를 분리한다.
   const cellSize = selected?.grid_cell_size ?? 50;
   const offsetX = selected?.grid_offset_x ?? 0;
@@ -527,6 +724,9 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const audience = role === "master" ? visibilityTarget : role === "player" ? currentUserId : "all";
   const revealedAreas = selected ? visibleAreas(selected.id, audience) : [];
   const previewArea = fogDragging && mapSize ? rectangleFromPoints(fogDragging.start, fogDragging.current, mapSize) : null;
+  const drawingPreview = drawingDrag
+    ? createDrawingDraft(drawingType, drawingDrag.points, { color: drawingColor, strokeWidth: drawingStrokeWidth }, drawingText)
+    : null;
   const maskId = selected ? `fog-visible-${selected.id}` : "fog-visible";
   const overlayMaskId = selected ? `fog-overlay-${selected.id}` : "fog-overlay";
 
@@ -553,6 +753,11 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         </defs>
         <g mask={selected.fog_enabled && role !== "master" ? `url(#${maskId})` : undefined}>
           <image href={selected.mapUrl} width={mapSize.width} height={mapSize.height} />
+          {selectedDrawings.map((drawing) => <MapDrawingShape
+            key={drawing.id}
+            drawing={drawing}
+            selected={drawing.id === selectedDrawingId}
+          />)}
           {selectedTokens.map((token) => {
           const tokenSize = Number(token.size) * cellSize;
           const x = offsetX + Number(token.x) * cellSize;
@@ -578,6 +783,16 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
             </g>;
           })}
         </g>
+        {drawingEditing && canDraw && !fogEditing && <rect
+          className="drawing-interaction"
+          width={mapSize.width}
+          height={mapSize.height}
+          onPointerDown={startDrawing}
+          onPointerMove={moveDrawing}
+          onPointerUp={finishDrawing}
+          onPointerCancel={() => setDrawingDrag(null)}
+        />}
+        {drawingPreview && <MapDrawingShape drawing={drawingPreview} />}
         {selected.fog_enabled && role === "master" && <rect className="fog-overlay" width={mapSize.width} height={mapSize.height} mask={`url(#${overlayMaskId})`} />}
         {selected.fog_enabled && role === "master" && fogEditing && <rect
           className="fog-interaction"
@@ -591,6 +806,46 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         {previewArea && <rect className={`fog-preview fog-preview-${fogMode}`} {...previewArea} />}
       </svg>}
       {selected && <span className="token-permission">{permissionText}</span>}
+      {selected && canDraw && <details className="drawing-controls" onToggle={(event) => {
+        setDrawingEditing(event.currentTarget.open);
+        if (!event.currentTarget.open) setDrawingDrag(null);
+      }}>
+        <summary>그리기</summary>
+        <div aria-busy={drawingBusy}>
+          <fieldset><legend>도구</legend>{DRAWING_TYPES.map((type) => <button
+            key={type}
+            type="button"
+            className={drawingType === type ? "drawing-tool-active" : ""}
+            aria-pressed={drawingType === type}
+            disabled={drawingBusy}
+            onClick={() => setDrawingType(type)}
+          >{DRAWING_LABELS[type]}</button>)}</fieldset>
+          {drawingType === "text" && <label>내용<input
+            value={drawingText}
+            maxLength={500}
+            disabled={drawingBusy}
+            onChange={(event) => setDrawingText(event.target.value)}
+            placeholder="맵에 표시할 텍스트"
+          /></label>}
+          <div className="drawing-style-controls">
+            <label>색상<input aria-label="그리기 색상" type="color" value={drawingColor} disabled={drawingBusy} onChange={(event) => setDrawingColor(event.target.value.toUpperCase())} /></label>
+            <label>두께 {drawingStrokeWidth}<input aria-label="선 두께" type="range" min="1" max="20" value={drawingStrokeWidth} disabled={drawingBusy} onChange={(event) => setDrawingStrokeWidth(Number(event.target.value))} /></label>
+          </div>
+          <label>기존 그림<select value={selectedDrawingId} disabled={drawingBusy || !selectedDrawings.length} onChange={(event) => {
+            const drawing = selectedDrawings.find(({ id }) => id === event.target.value);
+            setSelectedDrawingId(event.target.value);
+            if (drawing) {
+              setDrawingColor(drawing.color);
+              setDrawingStrokeWidth(Number(drawing.stroke_width));
+            }
+          }}><option value="">선택 안 함</option>{selectedDrawings.map((drawing, index) => <option key={drawing.id} value={drawing.id}>그림 {index + 1} · {DRAWING_LABELS[drawing.drawing_type]}</option>)}</select></label>
+          <div className="drawing-actions">
+            <button type="button" disabled={drawingBusy || !selectedDrawingId} onClick={() => void updateSelectedDrawing()}>스타일 적용</button>
+            <button className="drawing-delete" type="button" disabled={drawingBusy || !selectedDrawingId} onClick={() => void deleteSelectedDrawing()}>삭제</button>
+          </div>
+          <small>{fogEditing ? "시야 편집을 닫아야 그릴 수 있습니다." : drawingType === "text" ? "내용을 입력하고 맵을 클릭하세요." : "맵을 드래그해 그리세요."}</small>
+        </div>
+      </details>}
       {selected && role === "master" && <details className="fog-controls" onToggle={(event) => setFogEditing(event.currentTarget.open)}>
         <summary>Fog of War</summary>
         <div aria-busy={fogBusy}>

@@ -6,7 +6,7 @@ export default function RoomTools() {
   const { role, loading, canUse } = useRoomPermissions();
   const canViewMap = canUse("map_view");
   const canMoveTokens = canViewMap && canUse("token_move");
-  const canDraw = canViewMap && canUse("drawing");
+  const canDraw = canViewMap && canUse("drawing") && (role === "master" || role === "player");
 
   return <aside className="tool-rail" aria-label="맵 도구" aria-busy={loading}>
     <button className={canViewMap ? "tool-active" : ""} type="button" aria-label="선택" disabled={!canViewMap}>↖</button>
