@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { canSendChat, CHAT_MESSAGE_LIMIT, limitChatContent, mergeChatMessages, messageParts, systemMessageDisplay, visibleChatMessages } from "./chat-message";
 import type { ChatMessage, ChatMode } from "./chat-message";
 import { supabase } from "@/lib/supabase/client";
+import { useRoomPermissions } from "./room-permissions";
 
 type Role = "master" | "player" | "spectator";
 type Member = { user_id: string; role: Role };
@@ -16,6 +17,7 @@ const MODE_NAMES: Record<ChatMode, string> = { general: "일반", ic: "IC", ooc:
 const dateTime = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
 
 export default function Chat({ roomId }: { roomId?: string }) {
+  const { canUse, loading: permissionLoading } = useRoomPermissions();
   const [role, setRole] = useState<Role | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [senderNames, setSenderNames] = useState<Record<string, string>>({});
@@ -157,7 +159,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
     if (list) list.scrollTop = list.scrollHeight;
   }, [messages]);
 
-  const canSend = canSendChat(role);
+  const canSend = canSendChat(role, !permissionLoading && canUse("chat"));
   const visibleMessages = visibleChatMessages(messages, showSystemMessages);
 
   async function send(event: FormEvent<HTMLFormElement>) {
@@ -220,7 +222,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
       })}
     </div>
     {error && <p className="form-error chat-error" role="alert">{error}</p>}
-    {role === "spectator" && <p className="chat-notice">관전자는 채팅을 읽을 수 있지만 메시지를 보낼 수 없습니다.</p>}
+    {!permissionLoading && role && !canSend && <p className="chat-notice">채팅 기록은 읽을 수 있지만 메시지 전송 권한이 없습니다.</p>}
     <form className="chat-composer" onSubmit={send}>
       <div className="chat-options">
         <select aria-label="채팅 유형" value={mode} disabled={!canSend || loading || sending} onChange={(event) => setMode(event.target.value as ChatMode)}>

@@ -6,6 +6,7 @@ import { diceErrorMessage } from "./dice-error";
 import { diceRollDisplay, mergeDiceRolls, visibleDiceRolls } from "./dice-log";
 import type { DiceRollLog, DiceSort, DiceVisibility } from "./dice-log";
 import { supabase } from "@/lib/supabase/client";
+import { useRoomPermissions } from "./room-permissions";
 
 type Role = "master" | "player" | "spectator";
 type Member = { user_id: string; role: Role };
@@ -16,6 +17,7 @@ const ROLL_FIELDS = "id, room_id, roller_id, expression, individual_results, tot
 const NOTIFICATION_FIELDS = "id, room_id, roller_id, visibility, created_at";
 
 export default function DiceRoll({ roomId }: { roomId?: string }) {
+  const { canUse, loading: permissionLoading } = useRoomPermissions();
   const [role, setRole] = useState<Role | null>(null);
   const [rolls, setRolls] = useState<DiceRollLog[]>([]);
   const [rollerNames, setRollerNames] = useState<Record<string, string>>({});
@@ -118,7 +120,7 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
     return () => { void supabase.removeChannel(channel); };
   }, [roomId]);
 
-  const canRoll = role === "master" || role === "player";
+  const canRoll = Boolean(role) && !permissionLoading && canUse("dice");
   const rollers = useMemo(() => [...new Set(rolls.map((roll) => roll.roller_id))].map((id) => ({ id, name: rollerNames[id] ?? "알 수 없는 사용자" })), [rolls, rollerNames]);
   const visibleRolls = useMemo(() => visibleDiceRolls(rolls, rollerNames, rollerFilter, visibilityFilter, search, sort), [rolls, rollerNames, rollerFilter, visibilityFilter, search, sort]);
 
@@ -181,7 +183,7 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
       })}
     </div>
     {error && <p className="form-error dice-error" role="alert">{error}</p>}
-    {role === "spectator" && <p className="dice-notice">관전자는 주사위 결과만 볼 수 있습니다.</p>}
+    {!permissionLoading && role && !canRoll && <p className="dice-notice">주사위 결과는 볼 수 있지만 굴림 권한이 없습니다.</p>}
     <form className="chat-input dice-input" onSubmit={roll}>
       <select aria-label="주사위 공개 범위" value={visibility} onChange={(event) => setVisibility(event.target.value as DiceVisibility)} disabled={!canRoll || loading || rolling}>
         <option value="public">공개</option><option value="private">비공개</option>
