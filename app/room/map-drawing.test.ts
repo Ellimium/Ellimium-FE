@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createDrawingDraft, drawingPointFromClient } from "./map-drawing.ts";
+import { canEditMapDrawing, createDrawingDraft, drawingPointFromClient } from "./map-drawing.ts";
 
 const style = { color: "#123ABC", strokeWidth: 4 };
 
@@ -80,4 +80,12 @@ test("맵 이미지 밖의 포인터와 유효하지 않은 크기는 거부한�
     drawingPointFromClient(10, 10, { left: 0, top: 0, width: 0, height: 0 }, { width: 1000, height: 500 }),
     null,
   );
+});
+
+test("맵 보기와 그리기 권한이 모두 있을 때만 편집할 수 있다", () => {
+  assert.equal(canEditMapDrawing(true, true, "master"), true);
+  assert.equal(canEditMapDrawing(true, true, "player"), true);
+  assert.equal(canEditMapDrawing(true, true, "spectator"), false);
+  assert.equal(canEditMapDrawing(true, false, "player"), false);
+  assert.equal(canEditMapDrawing(false, true, "player"), false);
 });

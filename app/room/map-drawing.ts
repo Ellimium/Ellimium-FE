@@ -28,6 +28,14 @@ export type MapDrawing = DrawingDraft & {
   updated_at: string;
 };
 
+export function canEditMapDrawing(
+  canViewMap: boolean,
+  canUseDrawing: boolean,
+  role: "master" | "player" | "spectator" | null,
+) {
+  return canViewMap && canUseDrawing && (role === "master" || role === "player");
+}
+
 function validPoint(point: DrawingPoint | undefined): point is DrawingPoint {
   return Boolean(point && Number.isFinite(point.x) && Number.isFinite(point.y));
 }
