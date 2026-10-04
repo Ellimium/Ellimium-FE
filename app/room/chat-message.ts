@@ -70,6 +70,6 @@ export function systemMessageDisplay(message: ChatMessage, senderName: string) {
   return { label: "시스템", text: message.content };
 }
 
-export function canSendChat(role: string | null) {
-  return role === "master" || role === "player";
+export function canSendChat(role: string | null, permissionAllowed: boolean) {
+  return role !== null && permissionAllowed;
 }

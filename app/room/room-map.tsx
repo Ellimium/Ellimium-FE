@@ -5,6 +5,7 @@ import { FormEvent, KeyboardEvent, PointerEvent, useEffect, useRef, useState } f
 import { assetImagePaths, type Asset } from "../assets/asset-images";
 import { supabase } from "@/lib/supabase/client";
 import { hideArea, rectangleFromPoints, type VisibilityArea } from "./map-visibility";
+import { useRoomPermissions } from "./room-permissions";
 import { gridCoordinate, mapPointFromClient } from "./token-position";
 
 type Role = "master" | "player" | "spectator";
@@ -42,6 +43,9 @@ type VisibilityRow = {
 type FogDrag = { pointerId: number; start: { x: number; y: number }; current: { x: number; y: number } };
 
 export default function RoomMap({ roomId }: { roomId?: string }) {
+  const { canUse, loading: permissionLoading } = useRoomPermissions();
+  const canViewMap = !permissionLoading && canUse("map_view");
+  const canMoveTokens = canViewMap && canUse("token_move");
   const [maps, setMaps] = useState<DisplayMap[]>([]);
   const [tokens, setTokens] = useState<DisplayToken[]>([]);
   const [tokenAssets, setTokenAssets] = useState<TokenAsset[]>([]);
@@ -66,8 +70,21 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   useEffect(() => {
     let active = true;
 
-    if (!roomId) {
+    if (!roomId || permissionLoading) {
+      if (!roomId) setLoading(false);
+      return;
+    }
+
+    if (!canViewMap) {
+      setMaps([]);
+      setTokens([]);
+      setTokenAssets([]);
+      setVisibilityRows([]);
+      setSelectedId("");
+      setMapSize(null);
+      setDragging(null);
       setLoading(false);
+      setError("");
       return;
     }
 
@@ -186,7 +203,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       active = false;
       window.removeEventListener("room-map-registered", refresh);
     };
-  }, [roomId]);
+  }, [canViewMap, permissionLoading, roomId]);
 
   useEffect(() => { setMapSize(null); }, [selectedId]);
 
@@ -195,7 +212,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }, [players, visibilityTarget]);
 
   useEffect(() => {
-    if (!roomId || !maps.length) return;
+    if (!roomId || !canViewMap || !maps.length) return;
 
     let active = true;
     const mapIds = maps.map((map) => map.id);
@@ -242,10 +259,10 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       channelRef.current = null;
       void supabase.removeChannel(channel);
     };
-  }, [maps, roomId]);
+  }, [canViewMap, maps, roomId]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (!canViewMap || !selectedId) return;
     const channel = supabase
       .channel(`map-visibility:${selectedId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "map_visibility", filter: `map_id=eq.${selectedId}` }, ({ new: next }) => {
@@ -262,7 +279,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       });
 
     return () => { void supabase.removeChannel(channel); };
-  }, [selectedId]);
+  }, [canViewMap, selectedId]);
 
   function broadcastPosition(tokenId: string, x: number, y: number) {
     void channelRef.current?.send({ type: "broadcast", event: "token-move", payload: { token_id: tokenId, x, y } });
@@ -279,7 +296,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }
 
   function startDrag(event: PointerEvent<SVGGElement>, token: DisplayToken) {
-    if (!mapSize) return;
+    if (!canMoveTokens || !mapSize) return;
     const svg = event.currentTarget.ownerSVGElement;
     if (!svg) return;
     const point = mapPointFromClient(event.clientX, event.clientY, svg.getBoundingClientRect(), mapSize);
@@ -298,7 +315,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }
 
   function moveDrag(event: PointerEvent<SVGSVGElement>) {
-    if (!dragging || event.pointerId !== dragging.pointerId) return;
+    if (!canMoveTokens || !dragging || event.pointerId !== dragging.pointerId) return;
     const position = dragPosition(event.clientX, event.clientY, event.currentTarget, dragging);
     if (!position) return;
 
@@ -307,6 +324,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }
 
   async function persistPosition(tokenId: string, x: number, y: number, startX: number, startY: number) {
+    if (!canMoveTokens) return;
     setError("");
     try {
       const { data, error: updateError } = await supabase
@@ -326,7 +344,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }
 
   function finishDrag(event: PointerEvent<SVGSVGElement>) {
-    if (!dragging || event.pointerId !== dragging.pointerId) return;
+    if (!canMoveTokens || !dragging || event.pointerId !== dragging.pointerId) return;
     const drag = dragging;
     const position = dragPosition(event.clientX, event.clientY, event.currentTarget, drag);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
@@ -346,6 +364,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }
 
   function moveWithKeyboard(event: KeyboardEvent<SVGGElement>, token: DisplayToken) {
+    if (!canMoveTokens) return;
     const movement = {
       ArrowLeft: [-1, 0],
       ArrowRight: [1, 0],
@@ -500,7 +519,11 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const cellSize = selected?.grid_cell_size ?? 50;
   const offsetX = selected?.grid_offset_x ?? 0;
   const offsetY = selected?.grid_offset_y ?? 0;
-  const permissionText = role === "master" ? "모든 토큰 조작" : role === "player" ? "내 토큰 조작" : "조회 전용";
+  const permissionText = !canViewMap
+    ? "맵 보기 권한 없음"
+    : !canMoveTokens
+      ? "토큰 이동 불가"
+      : role === "master" ? "모든 토큰 조작" : "내 토큰 조작";
   const audience = role === "master" ? visibilityTarget : role === "player" ? currentUserId : "all";
   const revealedAreas = selected ? visibleAreas(selected.id, audience) : [];
   const previewArea = fogDragging && mapSize ? rectangleFromPoints(fogDragging.start, fogDragging.current, mapSize) : null;
@@ -509,6 +532,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
 
   return <>
     <div className="battle-map" aria-busy={loading}>
+      {!permissionLoading && !canViewMap && <p className="map-notice">맵 보기 권한이 없습니다.</p>}
       {selected && !mapSize && <img
         className="room-map-image"
         src={selected.mapUrl}
@@ -533,7 +557,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
           const tokenSize = Number(token.size) * cellSize;
           const x = offsetX + Number(token.x) * cellSize;
           const y = offsetY + Number(token.y) * cellSize;
-          const controllable = role === "master" || (role === "player" && token.owner_id === currentUserId);
+          const controllable = canMoveTokens && (role === "master" || (role === "player" && token.owner_id === currentUserId));
           const className = `map-token${controllable ? " token-controllable" : ""}${dragging?.tokenId === token.id ? " token-dragging" : ""}`;
             return <g
             className={className}

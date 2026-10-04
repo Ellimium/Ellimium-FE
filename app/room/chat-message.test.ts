@@ -36,11 +36,12 @@ test("HTTP(S)만 링크로 분리하고 HTML과 실행 가능한 스킴은 텍�
   assert.match(parts[0].value, /<script>/);
 });
 
-test("마스터와 플레이어만 채팅을 보낼 수 있다", () => {
-  assert.equal(canSendChat("master"), true);
-  assert.equal(canSendChat("player"), true);
-  assert.equal(canSendChat("spectator"), false);
-  assert.equal(canSendChat(null), false);
+test("룸 참가자는 허용된 경우에만 채팅을 보낼 수 있다", () => {
+  assert.equal(canSendChat("master", true), true);
+  assert.equal(canSendChat("player", true), true);
+  assert.equal(canSendChat("spectator", true), true);
+  assert.equal(canSendChat("player", false), false);
+  assert.equal(canSendChat(null, true), false);
 });
 
 test("이모지를 포함한 입력을 2000자로 제한한다", () => {

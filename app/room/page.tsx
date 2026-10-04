@@ -7,20 +7,21 @@ import DiceRoll from "./dice-roll";
 import RoomHeader from "./header";
 import MapRegistration from "./map-registration";
 import Participants from "./participants";
+import RoomFeaturePermissions from "./room-feature-permissions";
 import RoomMap from "./room-map";
+import { RoomPermissionsProvider } from "./room-permissions";
+import RoomTools from "./room-tools";
 
 export default async function Room({ searchParams }: { searchParams: Promise<{ roomId?: string }> }) {
   const { roomId } = await searchParams;
 
   return (
-    <AuthGuard><main className="room-shell">
+    <AuthGuard><RoomPermissionsProvider roomId={roomId}><main className="room-shell">
       <header className="room-topbar">
         <Link className="brand" href="/">ELLIMIUM</Link>
         <RoomHeader roomId={roomId} />
       </header>
-      <aside className="tool-rail" aria-label="맵 도구">
-        <button className="tool-active" type="button" aria-label="선택">↖</button><button type="button" aria-label="이동">✥</button><button type="button" aria-label="그리기">✎</button><button type="button" aria-label="거리 측정">⌁</button><button type="button" aria-label="시야 설정">◐</button><span /><button type="button" aria-label="설정">⚙</button>
-      </aside>
+      <RoomTools />
       <section className="map-stage" aria-label="게임 맵">
         <div className="map-toolbar"><button type="button">−</button><span>75%</span><button type="button">＋</button></div>
         <RoomMap roomId={roomId} />
@@ -28,6 +29,7 @@ export default async function Room({ searchParams }: { searchParams: Promise<{ r
       <aside className="game-panel">
         <MapRegistration roomId={roomId} />
         <Participants roomId={roomId} />
+        <RoomFeaturePermissions />
         <CharacterSheets roomId={roomId} />
         <section className="initiative">
           <div className="panel-heading"><div><p className="eyebrow">COMBAT</p><h2>턴 순서</h2></div><span>2 라운드</span></div>
@@ -37,6 +39,6 @@ export default async function Room({ searchParams }: { searchParams: Promise<{ r
         <Chat roomId={roomId} />
         <DiceRoll roomId={roomId} />
       </aside>
-    </main></AuthGuard>
+    </main></RoomPermissionsProvider></AuthGuard>
   );
 }
