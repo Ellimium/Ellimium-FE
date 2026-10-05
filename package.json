@@ -8,6 +8,7 @@
     "test:lobby": "node --experimental-strip-types --test app/lobby.test.ts",
     "test:profile": "node --experimental-strip-types --test app/profile/*.test.ts",
     "test:assets": "node --experimental-strip-types --test app/assets/*.test.ts",
+    "test:music": "node --experimental-strip-types --test app/music/*.test.ts",
     "test:room": "node --experimental-strip-types --test app/room/*.test.ts",
     "start": "next start"
   },

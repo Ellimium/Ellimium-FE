@@ -44,6 +44,7 @@ function Lobby() {
         <nav aria-label="주요 메뉴">
           <Link className="nav-active" href="/">캠페인</Link>
           <Link href="/assets">자산</Link>
+          <Link href="/music">음악</Link>
         </nav>
         <div className="account-actions"><LogoutButton /><Link className="avatar" href="/profile" aria-label="프로필">L</Link></div>
       </header>
