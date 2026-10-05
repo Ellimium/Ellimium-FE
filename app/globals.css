@@ -161,3 +161,12 @@ h1,h2,p { margin-top:0; }
   .asset-library { padding:20px; }
   .room-title,.live-dot { display:none; }.room-topbar { grid-template-columns:1fr auto; }.game-panel { grid-template-columns:1fr; }.initiative { border-right:0; border-bottom:1px solid var(--line); }
 }
+
+.music-list { display:grid; gap:12px; margin:0; padding:0; list-style:none; }
+.music-card { display:grid; gap:8px; padding:16px; border:1px solid var(--line); background:#171a1c; }
+.music-card strong { overflow-wrap:anywhere; }
+.music-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.music-edit { display:grid; gap:12px; }
+.music-preview { display:grid; gap:12px; margin-bottom:20px; padding:16px; border:1px solid var(--line); }
+.music-preview strong { overflow-wrap:anywhere; }
+.music-preview audio { width:100%; }
