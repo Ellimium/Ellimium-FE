@@ -8,6 +8,7 @@ import RoomHeader from "./header";
 import MapRegistration from "./map-registration";
 import Participants from "./participants";
 import RoomFeaturePermissions from "./room-feature-permissions";
+import { RoomJukeboxProvider } from "./room-jukebox";
 import RoomMap from "./room-map";
 import { RoomPermissionsProvider } from "./room-permissions";
 import RoomTools from "./room-tools";
@@ -16,7 +17,7 @@ export default async function Room({ searchParams }: { searchParams: Promise<{ r
   const { roomId } = await searchParams;
 
   return (
-    <AuthGuard><RoomPermissionsProvider roomId={roomId}><main className="room-shell">
+    <AuthGuard><RoomPermissionsProvider roomId={roomId}><RoomJukeboxProvider key={roomId ?? "no-room"} roomId={roomId}><main className="room-shell">
       <header className="room-topbar">
         <Link className="brand" href="/">ELLIMIUM</Link>
         <RoomHeader roomId={roomId} />
@@ -39,6 +40,6 @@ export default async function Room({ searchParams }: { searchParams: Promise<{ r
         <Chat roomId={roomId} />
         <DiceRoll roomId={roomId} />
       </aside>
-    </main></RoomPermissionsProvider></AuthGuard>
+    </main></RoomJukeboxProvider></RoomPermissionsProvider></AuthGuard>
   );
 }
