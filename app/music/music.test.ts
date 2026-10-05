@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { musicDuration, musicFormat, musicSize, musicUploadBody, musicUploadError } from "./music.ts";
+import { musicDuration, musicFormat, musicMutationError, musicSize, musicUploadBody, musicUploadError } from "./music.ts";
 
 test("음악 업로드는 제목을 정리하고 원본 바이트와 파일 이름을 보존한다", async () => {
   const bytes = new Uint8Array([1, 2, 3]);
@@ -55,4 +55,15 @@ test("BE 실패 유형을 구분하고 실패 정리가 필요한 경우를 명�
   assert.match(musicUploadError(502, { code: "storage_upload_failed" }), /거부/);
   assert.match(musicUploadError(500, { code: "cleanup_failed" }), /관리자/);
   assert.match(musicUploadError(500, null), /다시/);
+});
+
+test("수정·삭제 오류는 권한·소실·삭제 준비 상태와 재시도를 구분한다", () => {
+  assert.match(musicMutationError("rename", "42501"), /권한/);
+  assert.match(musicMutationError("rename", "P0002"), /이미 삭제/);
+  assert.match(musicMutationError("rename", "23514"), /삭제 처리 중/);
+  assert.match(musicMutationError("rename", "22023"), /제목/);
+  assert.match(musicMutationError("rename", undefined, 401), /로그인/);
+  assert.match(musicMutationError("delete", undefined, 403), /권한/);
+  assert.match(musicMutationError("delete", undefined, 502), /같은 음악/);
+  assert.match(musicMutationError("rename"), /다시/);
 });

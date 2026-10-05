@@ -54,3 +54,14 @@ export function musicSize(bytes: number) {
 export function musicFormat(mime: string) {
   return mime === "audio/mpeg" ? "MP3" : mime === "audio/ogg" ? "OGG" : "WAV";
 }
+
+export function musicMutationError(action: "rename" | "delete", code?: string, status?: number) {
+  if (status === 401) return "로그인이 만료되었습니다. 다시 로그인하세요.";
+  if (code === "42501" || status === 403) return "이 음악을 변경할 권한이 없습니다.";
+  if (code === "P0002") return "이미 삭제된 음악입니다. 목록을 확인하세요.";
+  if (code === "23514") return "삭제 처리 중인 음악의 제목은 변경할 수 없습니다.";
+  if (code === "22023" || status === 400) return "음악 제목과 요청 내용을 확인하세요.";
+  return action === "delete"
+    ? "삭제를 완료하지 못했습니다. 같은 음악의 삭제를 다시 시도하세요."
+    : "제목을 변경하지 못했습니다. 잠시 후 다시 시도하세요.";
+}
