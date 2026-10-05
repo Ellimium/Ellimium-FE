@@ -18,6 +18,42 @@ const noError = (message: string) => { if (message) assert.fail(message); };
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
 const url = (id: number, expiresIn = 2) => ({ signedUrl: `http://127.0.0.1:54321/music-${id}`, expiresIn });
 
+test("재발급 요청 중 누른 재생은 중복 요청 없이 새 URL에서 재개된다", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+  const audio = new AudioStub();
+  let requests = 0;
+  let resolve!: (value: ReturnType<typeof url>) => void;
+  const pending = new Promise<ReturnType<typeof url>>((done) => { resolve = done; });
+  const close = startMusicPreview(audio, () => ++requests === 1 ? Promise.resolve(url(1)) : pending, noError, () => {});
+  await settle(); audio.loaded(); await settle();
+  audio.pause(); audio.currentTime = 19;
+  t.mock.timers.tick(2000); await settle();
+  await audio.play(); await audio.play();
+  assert.equal(audio.paused, true);
+  assert.equal(requests, 2);
+  resolve(url(2)); await settle(); audio.loaded(); await settle();
+  assert.equal(audio.paused, false);
+  assert.equal(audio.currentTime, 19);
+  assert.equal(requests, 2);
+  close();
+});
+
+test("재발급 중 재생을 요청해도 권한 거부 시에는 정지한다", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+  const audio = new AudioStub();
+  let requests = 0;
+  let reject!: (error: Error) => void;
+  const errors: string[] = [];
+  const pending = new Promise<ReturnType<typeof url>>((_done, fail) => { reject = fail; });
+  const close = startMusicPreview(audio, () => ++requests === 1 ? Promise.resolve(url(1)) : pending, (error) => errors.push(error), () => {});
+  await settle(); audio.loaded(); await settle(); audio.pause();
+  t.mock.timers.tick(2000); await settle(); await audio.play();
+  reject(new Error("접근 권한이 없습니다.")); await settle(); audio.loaded(); await settle();
+  assert.equal(audio.paused, true); assert.equal(audio.src, "");
+  assert.deepEqual(errors.filter(Boolean), ["접근 권한이 없습니다."]);
+  close();
+});
+
 test("만료 후 재발급은 재생 위치를 보존하며 권한 거부 시 재생을 종료한다", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
   const audio = new AudioStub();

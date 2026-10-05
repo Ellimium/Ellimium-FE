@@ -10,6 +10,7 @@ export function startMusicPreview(
   let active = true;
   let failed = false;
   let refreshing = false;
+  let resumeRequested = false;
   let initial = true;
   let expiresAt = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -32,7 +33,10 @@ export function startMusicPreview(
   }
 
   async function renew(resume?: boolean) {
-    if (!active || failed || refreshing) return;
+    if (!active || failed) return;
+    // A play request arriving during issuance belongs to that same renewal.
+    if (resume) resumeRequested = true;
+    if (refreshing) return;
     refreshing = true;
     onLoading(true);
     const requestedAt = Date.now();
@@ -46,7 +50,8 @@ export function startMusicPreview(
         throw new Error("음악 URL을 발급받지 못했습니다. 다시 시도하세요.");
       }
       const position = initial ? 0 : audio.currentTime;
-      const shouldPlay = initial || (resume ?? !audio.paused);
+      const shouldPlay = initial || resumeRequested || !audio.paused;
+      resumeRequested = false;
       initial = false;
       if (onMetadata) audio.removeEventListener("loadedmetadata", onMetadata);
       onMetadata = () => {
