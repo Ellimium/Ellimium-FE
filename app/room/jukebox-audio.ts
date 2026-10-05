@@ -2,9 +2,9 @@ import type { JukeboxState } from "./jukebox.ts";
 
 type Audio = Pick<HTMLAudioElement, "src" | "duration" | "currentTime" | "paused" | "loop" | "volume" | "muted" | "play" | "pause" | "load" | "removeAttribute" | "addEventListener" | "removeEventListener">;
 export type SignedJukeboxMusic = { signedUrl: string; expiresIn: number };
-export type JukeboxAudioView = { loading: boolean; needsActivation: boolean; error: string; volume: number; muted: boolean };
+export type JukeboxAudioView = { loading: boolean; needsActivation: boolean; error: string; volume: number; muted: boolean; duration: number | null };
 export function emptyJukeboxAudio(): JukeboxAudioView {
-  return { loading: false, needsActivation: true, error: "", volume: 1, muted: false };
+  return { loading: false, needsActivation: true, error: "", volume: 1, muted: false, duration: null };
 }
 export function jukeboxPosition(state: JukeboxState, duration: number, now = Date.now()) {
   if (!Number.isFinite(duration) || duration <= 0) return 0;
@@ -42,7 +42,7 @@ export function startJukeboxAudio(
     audio.pause(); audio.removeAttribute("src"); audio.load();
   }
   function fail(message: string) {
-    failed = true; clear(); publish({ error: message, loading: false });
+    failed = true; clear(); publish({ error: message, loading: false, duration: null });
   }
   function apply() {
     if (!active || failed || !ready || !state || !musicId) return;
@@ -83,7 +83,7 @@ export function startJukeboxAudio(
     playing = false;
     const requestedAt = Date.now();
     issuing = true; ready = false; audio.pause(); audio.removeAttribute("src"); audio.load();
-    publish({ loading: true, error: "" });
+    publish({ loading: true, error: "", duration: null });
     try {
       const data = await issueUrl(requestedId);
       if (!active || request !== generation) return;
@@ -108,7 +108,7 @@ export function startJukeboxAudio(
     if (!Number.isFinite(audio.duration) || audio.duration <= 0) {
       fail("음악 파일의 재생 시간을 확인할 수 없습니다."); return;
     }
-    ready = true; publish({ loading: false }); apply();
+    ready = true; publish({ loading: false, duration: audio.duration }); apply();
   }
   function mediaError() {
     if (!active || failed || !musicId || issuing) return;
@@ -127,7 +127,7 @@ export function startJukeboxAudio(
       const id = next?.status !== "stopped" ? next?.music_asset_id ?? null : null;
       if (id !== musicId) {
         clear(); musicId = id; failed = false;
-        publish({ loading: false, error: "" });
+        publish({ loading: false, error: "", duration: null });
         if (id) void renew();
       } else apply();
     },

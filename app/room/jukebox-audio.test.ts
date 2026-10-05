@@ -32,7 +32,8 @@ test("서버 경과 시간과 실제 파일 길이로 위치·반복·파일 끝
 test("활성화 전에는 상태만 반영하고 메타데이터를 읽은 후 사용자가 재생한다", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
   const h = setup(); h.engine.update(state); await settle();
-  assert.equal(h.view.loading, true); h.audio.loaded(); await settle();
+  assert.equal(h.view.loading, true); assert.equal(h.view.duration, null); h.audio.loaded(); await settle();
+  assert.equal(h.view.duration, 10);
   assert.equal(h.audio.plays, 0); assert.equal(h.audio.currentTime, 1); assert.equal(h.view.needsActivation, true);
   h.engine.activate(); await settle(); assert.equal(h.audio.paused, false); assert.equal(h.view.needsActivation, false); h.engine.dispose();
 });
@@ -69,7 +70,7 @@ test("퇴장 후 재발급 거부는 즉시 파일을 해제하고 룸 권한 �
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 }); let requests = 0;
   const h = setup(async () => { if (++requests > 1) throw Object.assign(new Error("권한 거부"), { accessDenied: true }); return signed("a", 2); });
   h.engine.update(state); await settle(); h.audio.loaded(); h.engine.activate(); await settle(); t.mock.timers.tick(2000); await settle();
-  assert.equal(h.audio.src, ""); assert.equal(h.audio.paused, true); assert.equal(h.denied, 1); assert.equal(h.view.error, "권한 거부"); h.engine.dispose();
+  assert.equal(h.audio.src, ""); assert.equal(h.audio.paused, true); assert.equal(h.denied, 1); assert.equal(h.view.error, "권한 거부"); assert.equal(h.view.duration, null); h.engine.dispose();
 });
 test("새 음악 선택 후 늦은 이전 URL 응답은 재생을 복원하지 않는다", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 }); let resolve!: (data: SignedJukeboxMusic) => void;
@@ -84,7 +85,7 @@ test("정지·음악 삭제·퇴장·해제 중 진행 중인 URL 요청과 이�
   for (const next of [null, { ...state, status: "stopped" as const, music_asset_id: null }]) {
     let resolve!: (data: SignedJukeboxMusic) => void;
     const h = setup(() => new Promise((done) => { resolve = done; })); h.engine.update(state); h.engine.update(next);
-    resolve(signed()); await settle(); h.audio.loaded(); assert.equal(h.audio.src, ""); assert.equal(h.audio.paused, true); h.engine.dispose();
+    resolve(signed()); await settle(); h.audio.loaded(); assert.equal(h.audio.src, ""); assert.equal(h.audio.paused, true); assert.equal(h.view.duration, null); h.engine.dispose();
   }
   const h = setup(); h.engine.update(state); await settle(); h.audio.loaded(); h.engine.activate(); await settle();
   h.engine.dispose(); const count = h.views.length;
