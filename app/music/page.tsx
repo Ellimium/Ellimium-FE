@@ -6,6 +6,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
 import AuthGuard from "../auth-guard";
+import MusicPreview from "./music-preview";
 import { MusicAsset, musicDuration, musicFormat, musicMutationError, musicSize, musicUploadBody, musicUploadError } from "./music";
 
 export default function MusicPage() {
@@ -25,6 +26,7 @@ function MusicLibrary() {
   const [mutating, setMutating] = useState(false);
   const [actionError, setActionError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
+  const [preview, setPreview] = useState<MusicAsset | null>(null);
   const locked = busy || mutating;
   const requestId = useRef(0);
 
@@ -40,6 +42,9 @@ function MusicLibrary() {
       if (current !== requestId.current) return;
       if (queryError) throw queryError;
       setMusic(data ?? []);
+      setPreview((currentPreview) => currentPreview
+        ? data?.find((asset) => asset.id === currentPreview.id && !asset.deletion_pending) ?? null
+        : null);
     } catch {
       if (current === requestId.current) setListError("음악 목록을 불러오지 못했습니다. 다시 시도하세요.");
     } finally {
@@ -117,6 +122,7 @@ function MusicLibrary() {
   }
 
   async function deleteMusic(musicAssetId: string) {
+    setPreview((currentPreview) => currentPreview?.id === musicAssetId ? null : currentPreview);
     setActionError("");
     setActionMessage("");
     setMutating(true);
@@ -158,12 +164,14 @@ function MusicLibrary() {
       <div className="asset-library-heading"><div><p className="eyebrow">UPLOADED MUSIC</p><h2 id="music-list-title">내 음악</h2></div><span>{music.length}개</span></div>
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {actionMessage && <p className="form-message" role="status">{actionMessage}</p>}
+      {preview && <MusicPreview key={preview.id} asset={preview} onClose={() => setPreview(null)} />}
       {listError && <div><p className="form-error" role="alert">{listError}</p><button className="secondary-button" type="button" onClick={() => void loadMusic()} disabled={loading}>목록 다시 불러오기</button></div>}
       {loading ? <p className="muted">음악을 불러오는 중…</p> : !listError && music.length === 0 ? <p className="muted">아직 업로드한 음악이 없습니다.</p> : <ul className="music-list">
         {music.map((asset) => <li className="music-card" key={asset.id}>
           <strong>{asset.title}</strong>
           <span className="muted">{musicFormat(asset.mime_type)} · {musicSize(asset.file_size_bytes)} · {musicDuration(asset.duration_ms)}</span>
           {asset.deletion_pending && <small className="form-error">삭제 처리 중</small>}
+          <div className="music-actions"><button className="secondary-button" type="button" disabled={locked || asset.deletion_pending} onClick={() => setPreview(asset)}>미리 듣기</button></div>
           {editingId === asset.id && !asset.deletion_pending ? <form className="music-edit" onSubmit={(event) => void renameMusic(event, asset.id)}>
             <label>새 제목<input value={editedTitle} onChange={(event) => setEditedTitle(event.target.value)} required disabled={locked} /></label>
             <div className="music-actions"><button className="primary-button" type="submit" disabled={locked}>제목 저장</button><button className="secondary-button" type="button" onClick={() => setEditingId(null)} disabled={locked}>취소</button></div>

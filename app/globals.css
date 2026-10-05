@@ -167,3 +167,6 @@ h1,h2,p { margin-top:0; }
 .music-card strong { overflow-wrap:anywhere; }
 .music-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .music-edit { display:grid; gap:12px; }
+.music-preview { display:grid; gap:12px; margin-bottom:20px; padding:16px; border:1px solid var(--line); }
+.music-preview strong { overflow-wrap:anywhere; }
+.music-preview audio { width:100%; }
