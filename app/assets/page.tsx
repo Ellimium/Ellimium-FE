@@ -9,6 +9,8 @@ import { supabase } from "@/lib/supabase/client";
 import { Asset, assetImagePaths } from "./asset-images";
 import { validateUpload } from "./upload-validation";
 import AssetFolders from "./asset-folders";
+import SharedAssets from "./shared-assets";
+import AssetSharing from "./asset-sharing";
 import { AssetFolder, assetMoveError, assetsInFolder, orderedFolders } from "./folders";
 
 const acceptedImages = "image/jpeg,image/png,image/webp,image/gif";
@@ -37,6 +39,8 @@ export default function Assets() {
   const [assetsError, setAssetsError] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [sharingAssetId, setSharingAssetId] = useState("");
+  const [sharedRevision, setSharedRevision] = useState(0);
   const tree = orderedFolders(folders ?? []);
   const selectedFolderId = folders && !folders.some((folder) => folder.id === folderId) ? "" : folderId;
   const selectedFolderName = selectedFolderId ? folders?.find((folder) => folder.id === selectedFolderId)?.name ?? "선택한 폴더" : "미분류";
@@ -180,9 +184,15 @@ export default function Assets() {
               </select></label>
               <button className="secondary-button" type="submit" disabled={moveLocked}>자산 이동</button>
             </form>
+            <button className="secondary-button asset-refresh" type="button" disabled={loadingAssets || busy || moving}
+              aria-expanded={sharingAssetId === asset.id} aria-controls="asset-sharing-panel"
+              onClick={() => setSharingAssetId(asset.id)}>공유 관리</button>
           </article>)}
         </div>}
       </section>
+      {assets.some((asset) => asset.id === sharingAssetId) && <AssetSharing key={sharingAssetId} assetId={sharingAssetId}
+        onChange={() => setSharedRevision((value) => value + 1)} onClose={() => setSharingAssetId("")} />}
+      <SharedAssets revision={sharedRevision} />
     </div></main></AuthGuard>
   );
 }
