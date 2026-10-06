@@ -9,6 +9,7 @@ import { supabase } from "@/lib/supabase/client";
 import { Asset, assetImagePaths } from "./asset-images";
 import { validateUpload } from "./upload-validation";
 import AssetFolders from "./asset-folders";
+import SharedAssets from "./shared-assets";
 import { AssetFolder, assetMoveError, assetsInFolder, orderedFolders } from "./folders";
 
 const acceptedImages = "image/jpeg,image/png,image/webp,image/gif";
@@ -183,6 +184,7 @@ export default function Assets() {
           </article>)}
         </div>}
       </section>
+      <SharedAssets />
     </div></main></AuthGuard>
   );
 }
