@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildAttributes, canEditCharacterSheet, formatSheetEntries, parseSheetEntries } from "./character-sheet.ts";
+import { buildAttributes, canEditCharacterSheet, formatSheetEntries, parseSheetEntries, sheetRollItems, sheetRollMessage } from "./character-sheet.ts";
 
 test("D&D 5e와 CoC 7판 기본 능력치를 숫자로 만든다", () => {
   assert.deepEqual(buildAttributes("dnd_5e", { STR: "16", DEX: "14", CON: "13", INT: "12", WIS: "10", CHA: "8" }), {
@@ -31,4 +31,24 @@ test("마스터와 시트 소유자만 편집할 수 있다", () => {
   assert.equal(canEditCharacterSheet("player", "player", "player"), true);
   assert.equal(canEditCharacterSheet("player", "peer", "player"), false);
   assert.equal(canEditCharacterSheet("spectator", "spectator", "player"), false);
+});
+
+test("지원하는 시스템의 정수 항목만 시트 굴림을 제공한다", () => {
+  assert.deepEqual(sheetRollItems("dnd_5e", "attribute", { STR: 16, DEX: 9, HP: 12, CON: "13", INT: 0, WIS: 1.5 }), [["STR", 16], ["DEX", 9]]);
+  assert.deepEqual(sheetRollItems("coc_7e", "skill", { 관찰력: 60, 미숙: 0, 문자: "50", 음수: -1 }), [["관찰력", 60], ["미숙", 0]]);
+  assert.deepEqual(sheetRollItems("custom", "attribute", { STR: 16 }), []);
+  assert.deepEqual(sheetRollItems("dnd_5e", "skill", { 운동: 5 }), []);
+});
+
+test("D&D는 서버가 적용한 양수·음수 수정치와 합계를 표시한다", () => {
+  for (const [expression, total] of [["1d20+3", 18], ["1d20-1", 9]] as const) {
+    assert.equal(sheetRollMessage({ id: "roll", expression, total, sheet_roll: { system: "dnd_5e", character_name: "전사", item_key: "STR", value: 16 } }), `전사 · STR: ${expression} → ${total}`);
+  }
+});
+
+test("CoC는 굴림 당시 스킬 값으로 경계값·성공·실패를 비교한다", () => {
+  for (const total of [55, 60, 61]) {
+    const result = sheetRollMessage({ id: "roll", expression: "1d100", total, sheet_roll: { system: "coc_7e", character_name: "탐사자", item_key: "관찰력", value: 60 } });
+    assert.equal(result, `탐사자 · 관찰력: 1d100 → ${total} / 60 · ${total <= 60 ? "성공" : "실패"}`);
+  }
 });
