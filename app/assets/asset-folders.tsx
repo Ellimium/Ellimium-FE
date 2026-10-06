@@ -5,7 +5,9 @@ import { FormEvent, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { AssetFolder, folderError, orderedFolders } from "./folders";
 
-export default function AssetFolders() {
+export default function AssetFolders({ onFoldersChange }: {
+  onFoldersChange: (folders: AssetFolder[] | null) => void;
+}) {
   const [folders, setFolders] = useState<AssetFolder[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -23,11 +25,13 @@ export default function AssetFolders() {
   async function loadFolders() {
     setLoading(true);
     setLoadError("");
+    onFoldersChange(null);
     try {
       const { data, error: queryError } = await supabase.from("asset_folders")
         .select("id, name, parent_id, depth").order("name");
       if (queryError) throw queryError;
       setFolders(data);
+      onFoldersChange(data);
       setParentId((current) => data.some((folder) => folder.id === current) ? current : "");
       setEditingId((current) => data.some((folder) => folder.id === current) ? current : null);
     } catch {
