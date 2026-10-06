@@ -8,6 +8,8 @@ import AuthGuard from "../auth-guard";
 import { supabase } from "@/lib/supabase/client";
 import { Asset, assetImagePaths } from "./asset-images";
 import { validateUpload } from "./upload-validation";
+import AssetFolders from "./asset-folders";
+import { AssetFolder, assetMoveError, assetsInFolder, orderedFolders } from "./folders";
 
 const acceptedImages = "image/jpeg,image/png,image/webp,image/gif";
 
@@ -25,19 +27,32 @@ async function errorMessage(error: unknown) {
 
 export default function Assets() {
   const [busy, setBusy] = useState(false);
-  const [assets, setAssets] = useState<(Asset & { thumbnailUrl?: string; mapUrl?: string })[]>([]);
+  const [assets, setAssets] = useState<(Asset & { folder_id: string | null; thumbnailUrl?: string; mapUrl?: string })[]>([]);
+  const [folders, setFolders] = useState<AssetFolder[] | null>(null);
+  const [folderId, setFolderId] = useState("");
+  const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState("");
+  const [moveMessage, setMoveMessage] = useState("");
   const [loadingAssets, setLoadingAssets] = useState(true);
   const [assetsError, setAssetsError] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const tree = orderedFolders(folders ?? []);
+  const selectedFolderId = folders && !folders.some((folder) => folder.id === folderId) ? "" : folderId;
+  const selectedFolderName = selectedFolderId ? folders?.find((folder) => folder.id === selectedFolderId)?.name ?? "선택한 폴더" : "미분류";
+  const visibleAssets = assetsInFolder(assets, selectedFolderId);
+  const moveLocked = busy || moving || loadingAssets || !folders || !!assetsError;
 
   async function loadAssets() {
     setLoadingAssets(true);
     setAssetsError("");
     try {
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) throw authError ?? new Error("authentication required");
       const { data, error: queryError } = await supabase
         .from("assets")
-        .select("id, category, storage_path, thumbnail_storage_path, created_at")
+        .select("id, category, storage_path, thumbnail_storage_path, created_at, folder_id")
+        .eq("owner_id", user.id)
         .order("created_at", { ascending: false });
       if (queryError) throw queryError;
 
@@ -61,10 +76,32 @@ export default function Assets() {
 
   useEffect(() => { void loadAssets(); }, []);
 
+  async function moveAsset(event: FormEvent<HTMLFormElement>, assetId: string) {
+    event.preventDefault();
+    if (moveLocked) return;
+    const destination = String(new FormData(event.currentTarget).get("folder_id") ?? "");
+    setMoveError("");
+    setMoveMessage("");
+    if (destination && !folders.some((folder) => folder.id === destination)) {
+      setMoveError(assetMoveError("23503"));
+      return;
+    }
+    setMoving(true);
+    try {
+      const { error: updateError } = await supabase.from("assets")
+        .update({ folder_id: destination || null }).eq("id", assetId).select("id").single();
+      if (updateError) { setMoveError(assetMoveError(updateError.code)); return; }
+      setMoveMessage("자산을 이동했습니다.");
+      await loadAssets();
+    } catch { setMoveError(assetMoveError()); }
+    finally { setMoving(false); }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const body = new FormData(form);
+    if (busy || moving) return;
     const file = body.get("file");
     const thumbnailValue = body.get("thumbnail");
     const thumbnail = thumbnailValue instanceof File && thumbnailValue.size ? thumbnailValue : undefined;
@@ -92,7 +129,8 @@ export default function Assets() {
       }
       form.reset();
       setMessage("자산을 업로드했습니다.");
-      void loadAssets();
+      setFolderId("");
+      await loadAssets();
     } catch {
       setError("업로드 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.");
     } finally {
@@ -115,17 +153,33 @@ export default function Assets() {
         <label>썸네일 <small>선택 · 최대 5MB</small><input name="thumbnail" type="file" accept={acceptedImages} disabled={busy} /></label>
         {error && <p className="form-error" role="alert">{error}</p>}
         {message && <p className="form-message" role="status">{message}</p>}
-        <button className="primary-button full-button" type="submit" disabled={busy}>{busy ? "업로드 중…" : "자산 업로드"}</button>
+        <button className="primary-button full-button" type="submit" disabled={busy || moving}>{busy ? "업로드 중…" : "자산 업로드"}</button>
         <p className="form-foot"><Link href="/">← 캠페인으로 돌아가기</Link></p>
       </form>
-      <section className="asset-library" aria-labelledby="asset-list-title" aria-busy={loadingAssets}>
-        <div className="asset-library-heading"><div><p className="eyebrow">UPLOADED ASSETS</p><h2 id="asset-list-title">내 자산</h2></div><span>{assets.length}개</span></div>
+      <AssetFolders onFoldersChange={setFolders} />
+      <section className="asset-library" aria-labelledby="asset-list-title" aria-busy={loadingAssets || moving}>
+        <div className="asset-library-heading"><div><p className="eyebrow">UPLOADED ASSETS</p><h2 id="asset-list-title">내 자산 · {selectedFolderName}</h2></div><span>{visibleAssets.length}개</span></div>
+        <label className="asset-folder-filter">자산 폴더<select value={selectedFolderId} disabled={!folders || moving} onChange={(event) => setFolderId(event.target.value)}>
+          <option value="">미분류</option>
+          {tree.map((folder) => <option key={folder.id} value={folder.id}>{"─ ".repeat(folder.depth - 1)}{folder.name} · {folder.depth}단계</option>)}
+        </select></label>
+        <p className="muted">기존 자산과 새 업로드는 기본적으로 미분류에 표시됩니다.</p>
+        <button className="secondary-button asset-refresh" type="button" disabled={loadingAssets || moving || busy} onClick={() => void loadAssets()}>자산 새로고침</button>
         {assetsError && <p className="form-error" role="alert">{assetsError}</p>}
-        {loadingAssets ? <p className="muted">자산을 불러오는 중…</p> : assets.length === 0 ? <p className="muted">아직 업로드한 자산이 없습니다.</p> : <div className="asset-grid">
-          {assets.map((asset) => <article className="asset-card" key={asset.id}>
+        {moveError && <p className="form-error" role="alert">{moveError}</p>}
+        {moveMessage && <p className="form-message" role="status">{moveMessage}</p>}
+        {loadingAssets ? <p className="muted">자산을 불러오는 중…</p> : assetsError ? null : visibleAssets.length === 0 ? <p className="muted">이 위치에 자산이 없습니다.</p> : <div className="asset-grid">
+          {visibleAssets.map((asset) => <article className="asset-card" key={asset.id}>
             <div className="asset-thumbnail">{asset.thumbnailUrl ? <img src={asset.thumbnailUrl} alt={`${asset.category} 썸네일`} /> : <span>{asset.category}</span>}</div>
             <div><strong>{asset.category === "map" ? "맵" : asset.category === "token" ? "토큰" : asset.category === "item" ? "아이템" : "기타"}</strong><small>{asset.thumbnailUrl ? "사용자 썸네일" : "기본 썸네일"}</small></div>
             {asset.mapUrl && <img className="asset-map-result" src={asset.mapUrl} alt="리사이징된 맵 결과" />}
+            <form className="asset-move" key={asset.folder_id ?? "unclassified"} onSubmit={(event) => void moveAsset(event, asset.id)}>
+              <label>이동할 위치<select name="folder_id" defaultValue={asset.folder_id ?? ""} disabled={moveLocked}>
+                <option value="">미분류</option>
+                {tree.map((folder) => <option key={folder.id} value={folder.id}>{"─ ".repeat(folder.depth - 1)}{folder.name} · {folder.depth}단계</option>)}
+              </select></label>
+              <button className="secondary-button" type="submit" disabled={moveLocked}>자산 이동</button>
+            </form>
           </article>)}
         </div>}
       </section>
