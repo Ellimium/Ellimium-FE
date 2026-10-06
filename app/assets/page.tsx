@@ -8,6 +8,7 @@ import AuthGuard from "../auth-guard";
 import { supabase } from "@/lib/supabase/client";
 import { Asset, assetImagePaths } from "./asset-images";
 import { validateUpload } from "./upload-validation";
+import AssetFolders from "./asset-folders";
 
 const acceptedImages = "image/jpeg,image/png,image/webp,image/gif";
 
@@ -118,6 +119,7 @@ export default function Assets() {
         <button className="primary-button full-button" type="submit" disabled={busy}>{busy ? "업로드 중…" : "자산 업로드"}</button>
         <p className="form-foot"><Link href="/">← 캠페인으로 돌아가기</Link></p>
       </form>
+      <AssetFolders />
       <section className="asset-library" aria-labelledby="asset-list-title" aria-busy={loadingAssets}>
         <div className="asset-library-heading"><div><p className="eyebrow">UPLOADED ASSETS</p><h2 id="asset-list-title">내 자산</h2></div><span>{assets.length}개</span></div>
         {assetsError && <p className="form-error" role="alert">{assetsError}</p>}
