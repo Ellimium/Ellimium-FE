@@ -70,6 +70,11 @@ h1,h2,p { margin-top:0; }
 .asset-move { display:grid; gap:10px; }
 .asset-move button,.asset-refresh { background:#171a1c; cursor:pointer; }
 .asset-refresh { margin-bottom:18px; }
+.asset-sharing-list { display:grid; gap:12px; padding:0; list-style:none; }
+.asset-sharing-list li { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; }
+.asset-sharing-list span { overflow-wrap:anywhere; min-width:0; }
+.asset-sharing-list button { background:#171a1c; cursor:pointer; }
+.asset-sharing-list button:disabled { opacity:.5; cursor:not-allowed; }
 .asset-move button:disabled,.asset-refresh:disabled { opacity:.5; cursor:not-allowed; }
 
 .join-room-shell { min-height:100vh; display:grid; place-items:center; padding:48px 24px; background:radial-gradient(circle at 50% 0,#292319 0,transparent 35%),var(--ink); }

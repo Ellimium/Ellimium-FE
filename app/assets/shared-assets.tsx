@@ -64,7 +64,7 @@ function RoomAssets({ roomId }: { roomId: string }) {
   </div>;
 }
 
-export default function SharedAssets() {
+export default function SharedAssets({ revision = 0 }: { revision?: number }) {
   const [rooms, setRooms] = useState<{ id: string; name: string }[] | null>(null);
   const [roomId, setRoomId] = useState("");
   const [refresh, setRefresh] = useState(0);
@@ -73,6 +73,8 @@ export default function SharedAssets() {
 
   useEffect(() => {
     const controller = new AbortController();
+    setRooms(null);
+    setError("");
     supabase.from("rooms").select("id, name").order("created_at", { ascending: false })
       .abortSignal(controller.signal).then(({ data, error: queryError }) => {
         if (controller.signal.aborted) return;
@@ -80,7 +82,7 @@ export default function SharedAssets() {
         else { setRooms(data); setError(""); }
       });
     return () => controller.abort();
-  }, [refresh]);
+  }, [refresh, revision]);
 
   return <section className="asset-library" aria-labelledby="shared-assets-title" aria-busy={!rooms && !error}>
     <div className="asset-library-heading"><div><p className="eyebrow">ROOM ASSETS</p><h2 id="shared-assets-title">룸 공용 자산</h2></div></div>
@@ -94,7 +96,7 @@ export default function SharedAssets() {
     {error ? <p className="form-error" role="alert">{error}</p>
       : !rooms ? <p className="muted" role="status">참여 중인 룸을 불러오는 중…</p>
       : !rooms.length ? <p className="muted">참여 중인 룸이 없습니다.</p>
-      : selectedRoomId ? <RoomAssets key={`${selectedRoomId}:${refresh}`} roomId={selectedRoomId} />
+      : selectedRoomId ? <RoomAssets key={`${selectedRoomId}:${refresh}:${revision}`} roomId={selectedRoomId} />
       : <p className="muted">참여 중인 룸을 선택하면 공유된 자산을 볼 수 있습니다.</p>}
   </section>;
 }
