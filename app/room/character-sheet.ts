@@ -40,3 +40,34 @@ export function buildAttributes(system: SheetSystem, values: Record<string, stri
   if (!Object.keys(attributes).length) throw new Error("사용자 정의 항목을 한 개 이상 입력하세요.");
   return attributes;
 }
+
+export type SheetRollKind = "attribute" | "skill";
+
+export function sheetRollItems(system: SheetSystem, kind: SheetRollKind, entries: Record<string, unknown>) {
+  return Object.entries(entries).filter(([key, value]) =>
+    ((system === "dnd_5e" && kind === "attribute" && SHEET_SYSTEMS.dnd_5e.fields.includes(key)) ||
+      (system === "coc_7e" && kind === "skill")) &&
+    typeof value === "number" && Number.isSafeInteger(value) && value >= (system === "dnd_5e" ? 1 : 0));
+}
+
+export type SheetRollResult = {
+  id: string;
+  expression: string;
+  total: number | string;
+  sheet_roll: {
+    system: SheetSystem;
+    character_name: string;
+    item_key: string;
+    value: number;
+  };
+};
+
+export function sheetRollMessage(roll: SheetRollResult) {
+  const snapshot = roll.sheet_roll;
+  if (!snapshot || !Number.isFinite(Number(roll.total)) || !Number.isFinite(snapshot.value)) {
+    throw new Error("시트 굴림 결과를 확인할 수 없습니다.");
+  }
+  const comparison = snapshot.system === "coc_7e"
+    ? ` / ${snapshot.value} · ${Number(roll.total) <= snapshot.value ? "성공" : "실패"}` : "";
+  return `${snapshot.character_name} · ${snapshot.item_key}: ${roll.expression} → ${roll.total}${comparison}`;
+}

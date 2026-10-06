@@ -1,3 +1,5 @@
+import type { SheetRollResult } from "./character-sheet";
+
 export type DiceRollLog = {
   id: string;
   room_id: string;
@@ -6,6 +8,8 @@ export type DiceRollLog = {
   expression?: string;
   individual_results?: unknown;
   total?: number | string;
+  character_sheet_id?: string | null;
+  sheet_roll?: (SheetRollResult["sheet_roll"] & { modifier?: number | null }) | null;
   created_at: string;
 };
 
@@ -18,9 +22,18 @@ export function resultsText(results: unknown) {
 
 export function diceRollDisplay(roll: DiceRollLog) {
   const visibility = roll.visibility === "private" ? "비공개" : "공개";
-  return roll.expression === undefined || roll.total === undefined
-    ? { total: "?", summary: `비공개 굴림 · ${visibility}`, results: "결과는 마스터와 굴린 사용자에게만 공개됩니다." }
-    : { total: String(roll.total), summary: `${roll.expression} · ${visibility}`, results: resultsText(roll.individual_results) };
+  if (roll.expression === undefined || roll.total === undefined) {
+    return { total: "?", summary: `비공개 굴림 · ${visibility}`, results: "결과는 마스터와 굴린 사용자에게만 공개됩니다." };
+  }
+  const snapshot = roll.sheet_roll;
+  let context = "";
+  if (snapshot) {
+    const check = snapshot.system === "coc_7e"
+      ? `기준 ${snapshot.value} · ${Number(roll.total) <= snapshot.value ? "성공" : "실패"}`
+      : snapshot.modifier === undefined || snapshot.modifier === null ? "" : `수정치 ${snapshot.modifier >= 0 ? "+" : ""}${snapshot.modifier}`;
+    context = `${snapshot.character_name} · ${snapshot.item_key}${check ? ` (${check})` : ""} · `;
+  }
+  return { total: String(roll.total), summary: `${context}${roll.expression} · ${visibility}`, results: resultsText(roll.individual_results) };
 }
 
 export function mergeDiceRolls(current: DiceRollLog[], incoming: DiceRollLog | DiceRollLog[]) {
@@ -37,7 +50,7 @@ export function visibleDiceRolls(rolls: DiceRollLog[], rollerNames: Record<strin
   return [...rolls]
     .filter((roll) => !rollerId || roll.roller_id === rollerId)
     .filter((roll) => !visibility || roll.visibility === visibility)
-    .filter((roll) => !query || [rollerNames[roll.roller_id], roll.expression, roll.individual_results === undefined ? "" : resultsText(roll.individual_results), roll.total]
+    .filter((roll) => !query || [rollerNames[roll.roller_id], roll.expression, roll.individual_results === undefined ? "" : resultsText(roll.individual_results), roll.total, diceRollDisplay(roll).summary]
       .some((value) => String(value ?? "").toLocaleLowerCase("ko").includes(query)))
     .sort((left, right) => (Date.parse(left.created_at) - Date.parse(right.created_at)) * (sort === "asc" ? 1 : -1) || left.id.localeCompare(right.id));
 }

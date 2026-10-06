@@ -13,7 +13,7 @@ type Member = { user_id: string; role: Role };
 type Profile = { user_id: string; nickname: string };
 
 const dateTime = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
-const ROLL_FIELDS = "id, room_id, roller_id, expression, individual_results, total, visibility, created_at";
+const ROLL_FIELDS = "id, room_id, roller_id, expression, individual_results, total, visibility, character_sheet_id, sheet_roll, created_at";
 const NOTIFICATION_FIELDS = "id, room_id, roller_id, visibility, created_at";
 
 export default function DiceRoll({ roomId }: { roomId?: string }) {
