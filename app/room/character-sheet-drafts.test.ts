@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clearSheetDraft, updateSheetDraft } from "./character-sheet-drafts.ts";
+import { clearSheetDraft, hasSheetTabChanges, sheetEditValues, updateSheetDraft } from "./character-sheet-drafts.ts";
 
 test("메모에서 다른 탭을 편집한 뒤 돌아와도 모든 탭의 원문을 보존한다", () => {
   const notes = updateSheetDraft({}, "sheet-a", "notes", "notes", "미저장 메모\n  공백 포함");
@@ -17,6 +17,20 @@ test("메모에서 다른 탭을 편집한 뒤 돌아와도 모든 탭의 원문
     equipment: { equipment: "장검\n물약" },
   });
   assert.deepEqual(notes["sheet-a"], { notes: { notes: "미저장 메모\n  공백 포함" } });
+});
+
+test("원문을 저장값으로 되돌리거나 변경을 취소·저장하면 미저장 표시가 사라진다", () => {
+  const saved = sheetEditValues({ attributes: { STR: 12 }, resources: { HP: 3 }, skills: {}, equipment: ["장검"], notes: "메모", backstory: "" });
+  assert.equal(hasSheetTabChanges(undefined, saved), false);
+  assert.equal(hasSheetTabChanges({ attributes: "STR=12", resources: "HP=3" }, saved), false);
+  assert.equal(hasSheetTabChanges({ notes: "" }, saved), true);
+  assert.equal(hasSheetTabChanges({ notes: "메모\n" }, saved), true);
+
+  const edited = updateSheetDraft({}, "sheet-a", "notes", "notes", "수정");
+  const restored = updateSheetDraft(edited, "sheet-a", "notes", "notes", "메모");
+  assert.equal(hasSheetTabChanges(restored["sheet-a"].notes, saved), false);
+  assert.equal(hasSheetTabChanges(clearSheetDraft(edited, "sheet-a", "notes")["sheet-a"].notes, saved), false);
+  assert.equal(hasSheetTabChanges(edited["sheet-a"].notes, { ...saved, notes: "수정" }), false);
 });
 
 test("저장한 탭만 초안을 제거하고 다른 탭과 시트의 미저장 입력을 보존한다", () => {
