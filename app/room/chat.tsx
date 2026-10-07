@@ -33,40 +33,59 @@ export default function Chat({ roomId }: { roomId?: string }) {
 
   useEffect(() => {
     let active = true;
+    let version = 0;
+    setConnected(false);
+    setLoadedRole(null);
+    setMessages([]);
+    setSenderNames({});
+    senderNamesRef.current = {};
+    setCharacters([]);
 
     if (!roomId || !role || !currentUserId || permissionLoading) {
-      setMessages([]);
-      setCharacters([]);
       setLoading(false);
       return;
     }
 
+    setLoading(true);
+
+    async function loadMessages(request: number) {
+      const messages: ChatMessage[] = [];
+      // Read every page: the Data API caps each response at 1,000 rows.
+      for (let offset = 0; ; offset += 1000) {
+        const result = await supabase.from("chat_messages").select(MESSAGE_FIELDS).eq("room_id", roomId)
+          .order("created_at").order("id").range(offset, offset + 999);
+        if (!active || request !== version) return { data: [], error: null };
+        if (result.error) return result;
+        const page = (result.data ?? []) as ChatMessage[];
+        messages.push(...page);
+        if (page.length < 1000) return { data: messages, error: null };
+      }
+    }
+
     async function load() {
-      setMessages([]);
-      setSenderNames({});
-      senderNamesRef.current = {};
-      setCharacters([]);
-      setLoading(true);
+      const request = ++version;
       setError("");
 
       try {
         const [messageResult, characterResult] = await Promise.all([
-          supabase.from("chat_messages").select(MESSAGE_FIELDS).eq("room_id", roomId).order("created_at").order("id"),
+          loadMessages(request),
           supabase.from("character_sheets").select("id, name").eq("room_id", roomId).order("created_at"),
         ]);
 
-        if (!active) return;
+        if (!active || request !== version) return;
         if (messageResult.error || characterResult.error) {
           setError("채팅 기록과 권한을 불러오지 못했습니다.");
           setLoading(false);
           return;
         }
 
-        const profileResult = members.length
-          ? await supabase.from("profiles").select("user_id, nickname").in("user_id", members.map((member) => member.user_id))
+        const senderIds = [...new Set([...members.map((member) => member.user_id),
+          ...(messageResult.data ?? []).flatMap((message: ChatMessage) => message.sender_id ? [message.sender_id] : [])])];
+        const profileResult = senderIds.length
+          ? await supabase.from("profiles").select("user_id, nickname").in("user_id", senderIds)
           : { data: [], error: null };
 
-        if (!active) return;
+        if (!active || request !== version) return;
         if (profileResult.error) {
           setError("채팅 발신자 정보를 불러오지 못했습니다.");
           setLoading(false);
@@ -75,40 +94,19 @@ export default function Chat({ roomId }: { roomId?: string }) {
 
         setLoadedRole(role);
         const names = Object.fromEntries(((profileResult.data ?? []) as Profile[]).map((profile) => [profile.user_id, profile.nickname]));
-        senderNamesRef.current = names;
-        setSenderNames(names);
+        senderNamesRef.current = { ...senderNamesRef.current, ...names };
+        setSenderNames(senderNamesRef.current);
         setCharacters((characterResult.data ?? []) as Character[]);
         setMessages((current) => mergeChatMessages(current, (messageResult.data ?? []) as ChatMessage[]));
         setLoading(false);
       } catch {
-        if (active) {
+        if (active && request === version) {
           setError("채팅 서버에 연결하지 못했습니다.");
           setLoading(false);
         }
       }
     }
 
-    void load();
-    return () => { active = false; };
-  }, [currentUserId, members, permissionLoading, role, roomId]);
-
-  useEffect(() => {
-    if (!roomId) return;
-
-    function addCharacter(event: Event) {
-      const created = (event as CustomEvent<{ roomId: string; character: Character }>).detail;
-      if (created.roomId === roomId) setCharacters((current) => current.some(({ id }) => id === created.character.id) ? current : [...current, created.character]);
-    }
-
-    window.addEventListener("character-sheet-created", addCharacter);
-    return () => window.removeEventListener("character-sheet-created", addCharacter);
-  }, [roomId]);
-
-  useEffect(() => {
-    if (!roomId) return;
-
-    let active = true;
-    setConnected(false);
     const channel = supabase
       .channel(`room:${roomId}:chat`)
       .on("postgres_changes", {
@@ -117,6 +115,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
         table: "chat_messages",
         filter: `room_id=eq.${roomId}`,
       }, ({ new: inserted }) => {
+        if (!active) return;
         const message = inserted as ChatMessage;
         if (!message.id || message.room_id !== roomId) return;
 
@@ -133,14 +132,33 @@ export default function Chat({ roomId }: { roomId?: string }) {
           });
       })
       .subscribe((status) => {
-        if (status === "SUBSCRIBED") setConnected(true);
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") setConnected(false);
+        if (!active) return;
+        if (status === "SUBSCRIBED") {
+          setConnected(true);
+          void load();
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          setConnected(false);
+        }
       });
 
+    void load();
     return () => {
       active = false;
+      version++;
       void supabase.removeChannel(channel);
     };
+  }, [currentUserId, members, permissionLoading, role, roomId]);
+
+  useEffect(() => {
+    if (!roomId) return;
+
+    function addCharacter(event: Event) {
+      const created = (event as CustomEvent<{ roomId: string; character: Character }>).detail;
+      if (created.roomId === roomId) setCharacters((current) => current.some(({ id }) => id === created.character.id) ? current : [...current, created.character]);
+    }
+
+    window.addEventListener("character-sheet-created", addCharacter);
+    return () => window.removeEventListener("character-sheet-created", addCharacter);
   }, [roomId]);
 
   useEffect(() => {
