@@ -4,6 +4,7 @@ import AuthGuard from "../auth-guard";
 import Chat from "./chat";
 import CharacterSheets from "./character-sheets";
 import DiceRoll from "./dice-roll";
+import GamePanels from "./game-panels";
 import RoomHeader from "./header";
 import Jukebox from "./jukebox-panel";
 import MapRegistration from "./map-registration";
@@ -28,20 +29,20 @@ export default async function Room({ searchParams }: { searchParams: Promise<{ r
         <div className="map-toolbar"><button type="button">−</button><span>75%</span><button type="button">＋</button></div>
         <RoomMap roomId={roomId} />
       </section>
-      <aside className="game-panel">
-        <MapRegistration roomId={roomId} />
-        <Participants roomId={roomId} />
-        <RoomFeaturePermissions />
-        <CharacterSheets roomId={roomId} />
-        <Jukebox />
-        <section className="initiative">
+      <GamePanels roomId={roomId} panels={[
+        { id: "map-registration", title: "맵 등록", content: <MapRegistration roomId={roomId} /> },
+        { id: "participants", title: "참가자", content: <Participants roomId={roomId} /> },
+        { id: "feature-permissions", title: "기능 권한", content: <RoomFeaturePermissions /> },
+        { id: "character-sheets", title: "캐릭터 시트", content: <CharacterSheets roomId={roomId} /> },
+        { id: "jukebox", title: "주크박스", content: <Jukebox /> },
+        { id: "initiative", title: "턴 순서", content: <section className="initiative">
           <div className="panel-heading"><div><p className="eyebrow">COMBAT</p><h2>턴 순서</h2></div><span>2 라운드</span></div>
           <ol><li className="turn-active"><b>18</b><i className="mini-token">엘</i><span>엘리온<small>내 차례</small></span><em>12 / 18</em></li><li><b>15</b><i className="mini-token enemy">☠</i><span>해골 경비병</span><em>7 / 12</em></li><li><b>12</b><i className="mini-token">카</i><span>카일</span><em>21 / 24</em></li></ol>
           <button className="end-turn" type="button">턴 종료</button>
-        </section>
-        <Chat roomId={roomId} />
-        <DiceRoll roomId={roomId} />
-      </aside>
+        </section> },
+        { id: "chat", title: "채팅", content: <Chat roomId={roomId} /> },
+        { id: "dice", title: "주사위", content: <DiceRoll roomId={roomId} /> },
+      ]} />
     </main></RoomJukeboxProvider></RoomPermissionsProvider></AuthGuard>
   );
 }
