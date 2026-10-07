@@ -202,7 +202,7 @@ h1,h2,p { margin-top:0; }
 @media (max-width:620px) {
   .topbar { grid-template-columns:1fr auto; }.topbar nav { display:none; }.lobby-hero { align-items:start; flex-direction:column; padding-top:55px; }.lobby-actions { width:100%; flex-direction:column-reverse; }.lobby-actions a { width:100%; }.campaign-grid { grid-template-columns:1fr; }.login-story h1 { font-size:42px; }
   .asset-library { padding:20px; }
-  .room-title,.live-dot { display:none; }.room-topbar { grid-template-columns:1fr auto; }.game-panel { grid-template-columns:1fr; }.initiative { border-right:0; border-bottom:1px solid var(--line); }
+  .room-title { display:none; }.room-topbar { grid-template-columns:1fr auto; }.game-panel { grid-template-columns:1fr; }.initiative { border-right:0; border-bottom:1px solid var(--line); }
 }
 
 .music-list { display:grid; gap:12px; margin:0; padding:0; list-style:none; }
@@ -234,3 +234,10 @@ h1,h2,p { margin-top:0; }
 .character-sheet-rolls { display:grid; gap:8px; padding:10px 0; }.character-sheet-rolls p { margin:0; font-size:12px; line-height:1.5; }.character-sheet-rolls label { display:flex; align-items:center; gap:8px; font-size:12px; }.character-sheet-rolls select { padding:5px; background:var(--bg); color:inherit; border:1px solid var(--line); }.character-sheet-roll-buttons { display:flex; flex-wrap:wrap; gap:6px; }.character-sheet-roll-buttons button { padding:7px 10px; border:1px solid var(--line); background:transparent; color:inherit; border-radius:4px; }.character-sheet-roll-buttons button:disabled { opacity:.45; cursor:not-allowed; }
 
 .character-sheet-unsaved { color:var(--gold-soft); font-size:inherit; }.character-sheet-edit>p { margin:0; font-size:10px; }
+
+.record-status { font-size:9px; }
+.record-status-ready { color:#839d7a!important; }
+.record-status-connecting,.record-status-syncing { color:var(--gold-soft)!important; }
+.record-status-disconnected,.record-status-error { color:#dba39e!important; }
+.live-dot::before { background:currentColor; }
+.record-retry { margin:4px 12px 8px; padding:5px 9px; border:1px solid #66573b; background:#211e18; color:var(--text); font-size:10px; }

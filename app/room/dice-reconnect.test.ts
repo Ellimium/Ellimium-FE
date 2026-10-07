@@ -23,6 +23,9 @@ function deferred() {
 }
 
 function harness() {
+  let phase = "connecting";
+  let retry = () => {};
+  const publish = (state: string, again: () => void) => { phase = state; retry = again; };
   const states: unknown[] = [];
   let index = 0;
   let role: "master" | "player" | "spectator" = "master";
@@ -53,7 +56,7 @@ function harness() {
   };
   const exports: { default?: React.FunctionComponent<{ roomId: string }> } = {};
   runInNewContext(compiled, {
-    exports,
+    exports, window: new EventTarget(), navigator: { onLine: true },
     require: (name: string) => {
       if (name === "react") return { ...React,
         useState: (initial: unknown) => {
@@ -64,6 +67,7 @@ function harness() {
         useMemo: (factory: () => unknown) => factory(),
         useEffect: (next: typeof effect) => { effect = next; },
       };
+      if (name === "./room-connection") return { useRecordConnection: () => ({ state: phase, publish, retry }) };
       if (name === "./room-permissions") return { useRoomPermissions: () => ({ role, currentUserId: userId, members: [], loading: false, canUse: () => true }) };
       if (name === "@/lib/supabase/client") return { supabase: client };
       return require(name.startsWith("./") ? `${name}.ts` : name);
@@ -79,6 +83,8 @@ function harness() {
     insert(table: string, roll: DiceRollLog) { insert[table]({ new: roll }); },
     get callbacks() { return { status, insert }; },
     get rolls() { return states[1] as DiceRollLog[]; },
+    get phase() { return phase; },
+    retry() { retry(); },
     get error() { return states[11] as string; },
     dispose() { disposed(); },
     reads,
@@ -151,4 +157,12 @@ test("느린 이전 조회·종료 후 이벤트는 무시하고 실패한 조�
   h.dispose(); const count = h.reads.length;
   h.status("SUBSCRIBED"); h.insert("dice_rolls", detail("late"));
   assert.equal(h.reads.length, count); assert.equal(h.rolls.length, 2);
+});
+
+test("주사위 패널은 구독 후 동기화 완료·실패·재시도 결과를 헤더에 전달한다", async () => {
+  const h = harness(); h.start(); await settle(); assert.equal(h.phase, "connecting");
+  h.status("SUBSCRIBED"); assert.equal(h.phase, "syncing"); await settle(); assert.equal(h.phase, "ready");
+  h.read(async () => ({ data: null, error: { message: "failed" } })); h.retry(); await settle(); assert.equal(h.phase, "error");
+  h.read(async () => ({ data: [detail("recovered")], error: null })); h.retry(); await settle();
+  assert.equal(h.phase, "ready"); assert.equal(h.rolls[0].total, 7); h.dispose();
 });

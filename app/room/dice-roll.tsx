@@ -8,6 +8,9 @@ import type { DiceRollLog, DiceSort, DiceVisibility } from "./dice-log";
 import { supabase } from "@/lib/supabase/client";
 import { useRoomPermissions } from "./room-permissions";
 
+import { RECORD_CONNECTION_LABELS, startRecordConnection } from "./record-connection";
+import { useRecordConnection } from "./room-connection";
+
 type Profile = { user_id: string; nickname: string };
 
 const dateTime = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
@@ -29,6 +32,9 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
   const [rolling, setRolling] = useState(false);
   const [error, setError] = useState("");
 
+  const connection = useRecordConnection("dice");
+  const publishConnection = connection.publish;
+
   useEffect(() => {
     let active = true;
     let version = 0;
@@ -38,6 +44,7 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
 
     if (!roomId || !role || !currentUserId || permissionLoading) {
       setLoading(false);
+      publishConnection(navigator.onLine ? "connecting" : "disconnected", () => {});
       return;
     }
 
@@ -71,7 +78,7 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
         if (rollResult.error || notificationResult.error) {
           setError("주사위 기록을 불러오지 못했습니다.");
           setLoading(false);
-          return;
+          return false;
         }
 
         const nextRolls = mergeDiceRolls(
@@ -84,22 +91,24 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
         if (profileError) {
           setError("주사위 기록의 사용자 정보를 불러오지 못했습니다.");
           setLoading(false);
-          return;
+          return false;
         }
 
         setLoadedRole(role);
         setRolls((current) => mergeDiceRolls(current, nextRolls));
         setRollerNames(Object.fromEntries(((profileData ?? []) as Profile[]).map((profile) => [profile.user_id, profile.nickname])));
         setLoading(false);
+        return true;
       } catch {
         if (active && request === version) {
           setError("주사위 서버에 연결하지 못했습니다.");
           setLoading(false);
+          return false;
         }
       }
     }
 
-    const channel = supabase
+    const createChannel = () => supabase
       .channel(`room:${roomId}:dice`, { config: { private: true } })
       .on("postgres_changes", {
         event: "INSERT",
@@ -120,20 +129,16 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
         if (!active) return;
         const roll = inserted as DiceRollLog;
         if (roll.id && roll.room_id === roomId) setRolls((current) => mergeDiceRolls(current, roll));
-      })
-      .subscribe((status) => {
-        if (!active) return;
-        if (status === "SUBSCRIBED") void load();
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") setError("주사위 실시간 채널에 연결하지 못했습니다.");
       });
 
-    void load();
+    const disposeConnection = startRecordConnection(supabase, createChannel, load, publishConnection, { window, online: navigator.onLine });
     return () => {
       active = false;
       version++;
-      void supabase.removeChannel(channel);
+      disposeConnection();
+      publishConnection("connecting", () => {});
     };
-  }, [currentUserId, members, permissionLoading, role, roomId]);
+  }, [currentUserId, members, permissionLoading, publishConnection, role, roomId]);
 
   const canRoll = Boolean(role) && !loading && loadedRole === role && !permissionLoading && canUse("dice");
   const rollers = useMemo(() => [...new Set(rolls.map((roll) => roll.roller_id))].map((id) => ({ id, name: rollerNames[id] ?? "알 수 없는 사용자" })), [rolls, rollerNames]);
@@ -170,8 +175,9 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
     }
   }
 
-  return <section className="chat-panel dice-panel" aria-label="주사위" aria-busy={loading || rolling}>
-    <div className="panel-tabs"><button className="active" type="button">주사위</button><span>기록</span></div>
+  return <section className="chat-panel dice-panel" aria-label="주사위" aria-busy={loading || rolling || connection.state === "syncing"}>
+    <div className="panel-tabs"><button className="active" type="button">주사위</button><span>기록</span><span role="status" className={`record-status record-status-${connection.state}`}>{RECORD_CONNECTION_LABELS[connection.state]}</span></div>
+    {(connection.state === "error" || connection.state === "disconnected") && <button className="record-retry" type="button" onClick={connection.retry} aria-label="주사위 연결 및 기록 다시 시도">다시 시도</button>}
     <div className="dice-log-tools">
       <input type="search" aria-label="주사위 로그 검색" placeholder="로그 검색" value={search} onChange={(event) => setSearch(event.target.value)} />
       <select aria-label="주사위 사용자 필터" value={rollerFilter} onChange={(event) => setRollerFilter(event.target.value)}>

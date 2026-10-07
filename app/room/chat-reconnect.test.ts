@@ -26,6 +26,9 @@ function deferred() {
 
 // Exercise the component's actual query/subscription callbacks with deferred API responses.
 function harness() {
+  let phase = "connecting";
+  let retry = () => {};
+  const publish = (state: string, again: () => void) => { phase = state; retry = again; };
   const states: unknown[] = [];
   const effects: (() => void | (() => void))[] = [];
   let stateIndex = 0;
@@ -62,7 +65,7 @@ function harness() {
   };
   const exports: { default?: React.FunctionComponent<{ roomId: string }> } = {};
   runInNewContext(compiled, {
-    exports,
+    exports, window: new EventTarget(), navigator: { onLine: true },
     require: (name: string) => {
       if (name === "react") return { ...React,
         useState: (initial: unknown) => {
@@ -73,6 +76,7 @@ function harness() {
         useRef: (current: unknown) => ({ current }),
         useEffect: (effect: typeof effects[number]) => effects.push(effect),
       };
+      if (name === "./room-connection") return { useRecordConnection: () => ({ state: phase, publish, retry }) };
       if (name === "./room-permissions") return { useRoomPermissions: () => ({
         role: "player", currentUserId: "me", members: [{ user_id: "me" }], loading: false, canUse: () => true,
       }) };
@@ -87,7 +91,9 @@ function harness() {
     status: (next: string) => status(next),
     insert: (next: ChatMessage) => insert({ new: next }),
     get messages() { return states[1] as ChatMessage[]; },
-    get error() { return states[11] as string; },
+    get phase() { return phase; },
+    retry() { retry(); },
+    get error() { return states[10] as string; },
     get reads() { return reads; },
     get removed() { return removed; },
     ranges, profileIds,
@@ -163,4 +169,13 @@ test("페이지 조회 실패는 기존 기록을 유지하고 다음 구독에�
   h.status("SUBSCRIBED"); await settle();
   assert.equal(h.error, ""); assert.deepEqual(h.messages.map(({ id }) => id), ["before", "recovered"]);
   dispose();
+});
+
+test("채팅 패널은 구독 후 동기화 완료·실패·재시도 결과를 헤더에 전달한다", async () => {
+  const h = harness(); const dispose = h.start(); await settle();
+  assert.equal(h.phase, "connecting");
+  h.status("SUBSCRIBED"); assert.equal(h.phase, "syncing"); await settle(); assert.equal(h.phase, "ready");
+  h.read(async () => ({ data: null, error: { message: "failed" } })); h.retry(); await settle(); assert.equal(h.phase, "error");
+  h.read(async () => ({ data: [message("recovered")], error: null })); h.retry(); await settle();
+  assert.equal(h.phase, "ready"); assert.equal(h.messages[0].id, "recovered"); dispose();
 });
