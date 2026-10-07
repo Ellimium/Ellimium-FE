@@ -2,15 +2,17 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 
-import { buildAttributes, canEditCharacterSheet, formatSheetEntries, parseSheetEntries, sheetRollItems, sheetRollMessage, SHEET_SYSTEMS } from "./character-sheet";
+import { buildAttributes, canEditCharacterSheet, parseSheetEntries, sheetRollItems, sheetRollMessage, SHEET_SYSTEMS } from "./character-sheet";
 import type { SheetSystem, SheetRollKind, SheetRollResult } from "./character-sheet";
+import { clearSheetDraft, hasSheetTabChanges, sheetEditValues, updateSheetDraft } from "./character-sheet-drafts";
+import type { SheetDrafts, SheetField, SheetTab } from "./character-sheet-drafts";
+import { installSheetLeaveGuard } from "./character-sheet-leave";
 import { supabase } from "@/lib/supabase/client";
 
 import { diceErrorMessage } from "./dice-error";
 import { useRoomPermissions } from "./room-permissions";
 
 type Role = "master" | "player" | "spectator";
-type SheetTab = "attributes" | "skills" | "equipment" | "notes";
 type CharacterSheet = {
   id: string;
   owner_id: string;
@@ -36,11 +38,23 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
   const [userId, setUserId] = useState("");
   const [sheets, setSheets] = useState<CharacterSheet[]>([]);
   const [tabs, setTabs] = useState<Record<string, SheetTab>>({});
+  const [drafts, setDrafts] = useState<SheetDrafts>({});
   const [system, setSystem] = useState<SheetSystem>("dnd_5e");
   const [loading, setLoading] = useState(Boolean(roomId));
   const [saving, setSaving] = useState(false);
+  const [savingSheetId, setSavingSheetId] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const changedTabs = Object.fromEntries(sheets.map((sheet) => {
+    const saved = sheetEditValues(sheet);
+    return [sheet.id, Object.fromEntries((Object.keys(SHEET_TABS) as SheetTab[]).map((tab) =>
+      [tab, hasSheetTabChanges(drafts[sheet.id]?.[tab], saved)]))];
+  }));
+  const hasUnsavedChanges = Object.values(changedTabs).some((tabs) => Object.values(tabs).some(Boolean));
+
+  useEffect(() => {
+    if (hasUnsavedChanges) return installSheetLeaveGuard(window);
+  }, [hasUnsavedChanges]);
 
   useEffect(() => {
     let active = true;
@@ -134,7 +148,7 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
 
   async function updateSheet(event: FormEvent<HTMLFormElement>, sheet: CharacterSheet, tab: SheetTab) {
     event.preventDefault();
-    if (rollingLock.current || !canEditCharacterSheet(role, userId, sheet.owner_id)) return;
+    if (saving || rollingLock.current || !canEditCharacterSheet(role, userId, sheet.owner_id)) return;
 
     const form = new FormData(event.currentTarget);
     let changes: Record<string, unknown>;
@@ -152,6 +166,7 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
     }
 
     setSaving(true);
+    setSavingSheetId(sheet.id);
     setError("");
     setMessage("");
     try {
@@ -161,10 +176,12 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
         return;
       }
       setSheets((current) => current.map((item) => item.id === sheet.id ? data as CharacterSheet : item));
+      setDrafts((current) => clearSheetDraft(current, sheet.id, tab));
       setMessage(`${sheet.name} 시트를 저장했습니다.`);
     } catch {
       setError("캐릭터 시트 서버에 연결하지 못했습니다.");
     } finally {
+      setSavingSheetId("");
       setSaving(false);
     }
   }
@@ -224,9 +241,15 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
       const kind = tab === "attributes" ? "attribute" : "skill";
       const rollItems = tab === "attributes" || tab === "skills" ? sheetRollItems(sheet.system, kind, tab === "attributes" ? sheet.attributes : sheet.skills) : [];
       const editable = canEditCharacterSheet(role, userId, sheet.owner_id);
+      const draft = drafts[sheet.id]?.[tab];
+      const saved = sheetEditValues(sheet);
+      const editField = (field: SheetField, value: string) => setDrafts((current) => updateSheetDraft(current, sheet.id, tab, field, value));
       return <details key={sheet.id}>
-        <summary><strong>{sheet.name}</strong><span>{SHEET_SYSTEMS[sheet.system]?.label ?? sheet.system}</span></summary>
-        <div className="character-sheet-tabs" role="tablist" aria-label={`${sheet.name} 시트 항목`}>{Object.entries(SHEET_TABS).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTabs((current) => ({ ...current, [sheet.id]: value as SheetTab }))}>{label}</button>)}</div>
+        <summary><strong>{sheet.name}{Object.values(changedTabs[sheet.id]).some(Boolean) && <small className="character-sheet-unsaved"> · 미저장</small>}</strong><span>{SHEET_SYSTEMS[sheet.system]?.label ?? sheet.system}</span></summary>
+        <div className="character-sheet-tabs" role="tablist" aria-label={`${sheet.name} 시트 항목`}>{Object.entries(SHEET_TABS).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={tab === value} disabled={savingSheetId === sheet.id} onClick={() => {
+          if (savingSheetId === sheet.id) return;
+          setTabs((current) => ({ ...current, [sheet.id]: value as SheetTab }));
+        }}>{label}{changedTabs[sheet.id][value] && <span className="character-sheet-unsaved"> · 미저장</span>}</button>)}</div>
         {rollItems.length > 0 && <div className="character-sheet-rolls">
           <p className="muted">저장된 시트 값으로 검사합니다. 편집한 값은 먼저 저장하세요.</p>
           <label>굴림 공개 범위<select aria-label={`${sheet.name} 굴림 공개 범위`} value={visibility} onChange={(event) => setVisibility(event.target.value as "public" | "private")} disabled={saving || rolling}>
@@ -236,11 +259,13 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
           {!permissionLoading && !canUse("dice") && <p className="muted">주사위 굴림 권한이 없습니다.</p>}
         </div>}
         {editable ? <form key={tab} className="character-sheet-edit" onSubmit={(event) => updateSheet(event, sheet, tab)}>
-          {tab === "attributes" && <><label>능력치<textarea name="attributes" required rows={4} defaultValue={formatSheetEntries(sheet.attributes)} disabled={saving || rolling} /></label><label>자원 (HP·MP 등)<textarea name="resources" rows={3} placeholder={"HP=12\nMP=5"} defaultValue={formatSheetEntries(sheet.resources)} disabled={saving || rolling} /></label></>}
-          {tab === "skills" && <label>스킬 점수<textarea name="skills" rows={5} placeholder={"운동=5\n은신=3"} defaultValue={formatSheetEntries(sheet.skills)} disabled={saving || rolling} /></label>}
-          {tab === "equipment" && <label>장비·아이템<textarea name="equipment" rows={5} placeholder={"장검\n치유 물약"} defaultValue={sheet.equipment.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join("\n")} disabled={saving || rolling} /></label>}
-          {tab === "notes" && <><label>메모<textarea name="notes" rows={3} defaultValue={sheet.notes} disabled={saving || rolling} /></label><label>배경 이야기<textarea name="backstory" rows={5} defaultValue={sheet.backstory} disabled={saving || rolling} /></label></>}
+          {changedTabs[sheet.id][tab] && <p className="muted" role="status">저장하지 않은 변경이 있습니다.</p>}
+          {tab === "attributes" && <><label>능력치<textarea name="attributes" required rows={4} value={draft?.attributes ?? saved.attributes} onChange={(event) => editField("attributes", event.target.value)} disabled={saving || rolling} /></label><label>자원 (HP·MP 등)<textarea name="resources" rows={3} placeholder={"HP=12\nMP=5"} value={draft?.resources ?? saved.resources} onChange={(event) => editField("resources", event.target.value)} disabled={saving || rolling} /></label></>}
+          {tab === "skills" && <label>스킬 점수<textarea name="skills" rows={5} placeholder={"운동=5\n은신=3"} value={draft?.skills ?? saved.skills} onChange={(event) => editField("skills", event.target.value)} disabled={saving || rolling} /></label>}
+          {tab === "equipment" && <label>장비·아이템<textarea name="equipment" rows={5} placeholder={"장검\n치유 물약"} value={draft?.equipment ?? saved.equipment} onChange={(event) => editField("equipment", event.target.value)} disabled={saving || rolling} /></label>}
+          {tab === "notes" && <><label>메모<textarea name="notes" rows={3} value={draft?.notes ?? saved.notes} onChange={(event) => editField("notes", event.target.value)} disabled={saving || rolling} /></label><label>배경 이야기<textarea name="backstory" rows={5} value={draft?.backstory ?? saved.backstory} onChange={(event) => editField("backstory", event.target.value)} disabled={saving || rolling} /></label></>}
           <button className="primary-button" type="submit" disabled={saving || rolling}>{saving ? "저장 중…" : "변경 저장"}</button>
+          <button type="button" disabled={saving || rolling || !changedTabs[sheet.id][tab]} onClick={() => setDrafts((current) => clearSheetDraft(current, sheet.id, tab))}>변경 취소</button>
         </form> : <p className="muted character-sheet-readonly">이 시트는 읽기만 가능합니다.</p>}
       </details>;
     })}</div>

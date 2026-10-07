@@ -101,7 +101,12 @@ function MasterPanels({ panels, userId }: { panels: Panel[]; userId: string }) {
 
 export default function GamePanels({ panels, roomId }: { panels: Panel[]; roomId?: string }) {
   const { role, currentUserId, loading } = useRoomPermissions();
-  if (!loading && role === "master" && currentUserId) {
+  if (loading) {
+    return <aside className="game-panel" aria-label="게임 패널" aria-busy="true">
+      <p className="muted" role="status">게임 패널 권한을 확인하는 중입니다.</p>
+    </aside>;
+  }
+  if (role === "master" && currentUserId) {
     return <MasterPanels key={`${roomId}:${currentUserId}`} panels={panels} userId={currentUserId} />;
   }
   return <aside className="game-panel" aria-label="게임 패널">
