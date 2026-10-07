@@ -241,7 +241,7 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
       const kind = tab === "attributes" ? "attribute" : "skill";
       const rollItems = tab === "attributes" || tab === "skills" ? sheetRollItems(sheet.system, kind, tab === "attributes" ? sheet.attributes : sheet.skills) : [];
       const editable = canEditCharacterSheet(role, userId, sheet.owner_id);
-      const draft = drafts[sheet.id]?.[tab];
+      const draft = editable ? drafts[sheet.id]?.[tab] : undefined;
       const saved = sheetEditValues(sheet);
       const editField = (field: SheetField, value: string) => setDrafts((current) => updateSheetDraft(current, sheet.id, tab, field, value));
       return <details key={sheet.id}>
@@ -258,15 +258,16 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
           <div className="character-sheet-roll-buttons">{rollItems.map(([key, value]) => <button key={key} type="button" disabled={!editable || permissionLoading || !canUse("dice") || loading || saving || rolling} onClick={() => void rollSheet(sheet, kind, key)} aria-label={`${sheet.name} ${key} 검사 굴리기`}>{key} {String(value)} · 굴리기</button>)}</div>
           {!permissionLoading && !canUse("dice") && <p className="muted">주사위 굴림 권한이 없습니다.</p>}
         </div>}
-        {editable ? <form key={tab} className="character-sheet-edit" onSubmit={(event) => updateSheet(event, sheet, tab)}>
-          {changedTabs[sheet.id][tab] && <p className="muted" role="status">저장하지 않은 변경이 있습니다.</p>}
-          {tab === "attributes" && <><label>능력치<textarea name="attributes" required rows={4} value={draft?.attributes ?? saved.attributes} onChange={(event) => editField("attributes", event.target.value)} disabled={saving || rolling} /></label><label>자원 (HP·MP 등)<textarea name="resources" rows={3} placeholder={"HP=12\nMP=5"} value={draft?.resources ?? saved.resources} onChange={(event) => editField("resources", event.target.value)} disabled={saving || rolling} /></label></>}
-          {tab === "skills" && <label>스킬 점수<textarea name="skills" rows={5} placeholder={"운동=5\n은신=3"} value={draft?.skills ?? saved.skills} onChange={(event) => editField("skills", event.target.value)} disabled={saving || rolling} /></label>}
-          {tab === "equipment" && <label>장비·아이템<textarea name="equipment" rows={5} placeholder={"장검\n치유 물약"} value={draft?.equipment ?? saved.equipment} onChange={(event) => editField("equipment", event.target.value)} disabled={saving || rolling} /></label>}
-          {tab === "notes" && <><label>메모<textarea name="notes" rows={3} value={draft?.notes ?? saved.notes} onChange={(event) => editField("notes", event.target.value)} disabled={saving || rolling} /></label><label>배경 이야기<textarea name="backstory" rows={5} value={draft?.backstory ?? saved.backstory} onChange={(event) => editField("backstory", event.target.value)} disabled={saving || rolling} /></label></>}
-          <button className="primary-button" type="submit" disabled={saving || rolling}>{saving ? "저장 중…" : "변경 저장"}</button>
-          <button type="button" disabled={saving || rolling || !changedTabs[sheet.id][tab]} onClick={() => setDrafts((current) => clearSheetDraft(current, sheet.id, tab))}>변경 취소</button>
-        </form> : <p className="muted character-sheet-readonly">이 시트는 읽기만 가능합니다.</p>}
+        <form key={tab} className="character-sheet-edit" onSubmit={(event) => updateSheet(event, sheet, tab)}>
+          {!editable && <p className="muted character-sheet-readonly">이 시트는 읽기만 가능합니다.</p>}
+          {editable && changedTabs[sheet.id][tab] && <p className="muted" role="status">저장하지 않은 변경이 있습니다.</p>}
+          {tab === "attributes" && <><label>능력치<textarea readOnly={!editable} name="attributes" required rows={4} value={draft?.attributes ?? saved.attributes} onChange={(event) => editField("attributes", event.target.value)} disabled={saving || rolling} /></label><label>자원 (HP·MP 등)<textarea readOnly={!editable} name="resources" rows={3} placeholder={editable ? "HP=12\nMP=5" : "등록된 내용이 없습니다."} value={draft?.resources ?? saved.resources} onChange={(event) => editField("resources", event.target.value)} disabled={saving || rolling} /></label></>}
+          {tab === "skills" && <label>스킬 점수<textarea readOnly={!editable} name="skills" rows={5} placeholder={editable ? "운동=5\n은신=3" : "등록된 내용이 없습니다."} value={draft?.skills ?? saved.skills} onChange={(event) => editField("skills", event.target.value)} disabled={saving || rolling} /></label>}
+          {tab === "equipment" && <label>장비·아이템<textarea readOnly={!editable} name="equipment" rows={5} placeholder={editable ? "장검\n치유 물약" : "등록된 내용이 없습니다."} value={draft?.equipment ?? saved.equipment} onChange={(event) => editField("equipment", event.target.value)} disabled={saving || rolling} /></label>}
+          {tab === "notes" && <><label>메모<textarea readOnly={!editable} name="notes" rows={3} value={draft?.notes ?? saved.notes} onChange={(event) => editField("notes", event.target.value)} disabled={saving || rolling} /></label><label>배경 이야기<textarea readOnly={!editable} name="backstory" rows={5} value={draft?.backstory ?? saved.backstory} onChange={(event) => editField("backstory", event.target.value)} disabled={saving || rolling} /></label></>}
+          {editable && <><button className="primary-button" type="submit" disabled={saving || rolling}>{saving ? "저장 중…" : "변경 저장"}</button>
+          <button type="button" disabled={saving || rolling || !changedTabs[sheet.id][tab]} onClick={() => setDrafts((current) => clearSheetDraft(current, sheet.id, tab))}>변경 취소</button></>}
+        </form>
       </details>;
     })}</div>
   </section>;
