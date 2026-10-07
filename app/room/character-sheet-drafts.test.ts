@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { updateSheetDraft } from "./character-sheet-drafts.ts";
+import { clearSheetDraft, updateSheetDraft } from "./character-sheet-drafts.ts";
 
 test("메모에서 다른 탭을 편집한 뒤 돌아와도 모든 탭의 원문을 보존한다", () => {
   const notes = updateSheetDraft({}, "sheet-a", "notes", "notes", "미저장 메모\n  공백 포함");
@@ -17,6 +17,19 @@ test("메모에서 다른 탭을 편집한 뒤 돌아와도 모든 탭의 원문
     equipment: { equipment: "장검\n물약" },
   });
   assert.deepEqual(notes["sheet-a"], { notes: { notes: "미저장 메모\n  공백 포함" } });
+});
+
+test("저장한 탭만 초안을 제거하고 다른 탭과 시트의 미저장 입력을 보존한다", () => {
+  const notes = updateSheetDraft({}, "sheet-a", "notes", "notes", "저장할 메모");
+  const skills = updateSheetDraft(notes, "sheet-a", "skills", "skills", "운동=7");
+  const drafts = updateSheetDraft(skills, "sheet-b", "notes", "notes", "다른 시트 메모");
+  const saved = clearSheetDraft(drafts, "sheet-a", "notes");
+
+  assert.equal(saved["sheet-a"].notes, undefined);
+  assert.equal(saved["sheet-a"].skills?.skills, "운동=7");
+  assert.equal(saved["sheet-b"].notes?.notes, "다른 시트 메모");
+  assert.equal(drafts["sheet-a"].notes?.notes, "저장할 메모");
+  assert.equal(clearSheetDraft(saved, "sheet-a", "notes")["sheet-a"].skills?.skills, "운동=7");
 });
 
 test("여러 시트의 같은 탭을 번갈아 편집하고 내용을 비워도 초안이 섞이지 않는다", () => {

@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { buildAttributes, canEditCharacterSheet, formatSheetEntries, parseSheetEntries, sheetRollItems, sheetRollMessage, SHEET_SYSTEMS } from "./character-sheet";
 import type { SheetSystem, SheetRollKind, SheetRollResult } from "./character-sheet";
-import { updateSheetDraft } from "./character-sheet-drafts";
+import { clearSheetDraft, updateSheetDraft } from "./character-sheet-drafts";
 import type { SheetDrafts, SheetField, SheetTab } from "./character-sheet-drafts";
 import { supabase } from "@/lib/supabase/client";
 
@@ -41,6 +41,7 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
   const [system, setSystem] = useState<SheetSystem>("dnd_5e");
   const [loading, setLoading] = useState(Boolean(roomId));
   const [saving, setSaving] = useState(false);
+  const [savingSheetId, setSavingSheetId] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -136,7 +137,7 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
 
   async function updateSheet(event: FormEvent<HTMLFormElement>, sheet: CharacterSheet, tab: SheetTab) {
     event.preventDefault();
-    if (rollingLock.current || !canEditCharacterSheet(role, userId, sheet.owner_id)) return;
+    if (saving || rollingLock.current || !canEditCharacterSheet(role, userId, sheet.owner_id)) return;
 
     const form = new FormData(event.currentTarget);
     let changes: Record<string, unknown>;
@@ -154,6 +155,7 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
     }
 
     setSaving(true);
+    setSavingSheetId(sheet.id);
     setError("");
     setMessage("");
     try {
@@ -163,10 +165,12 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
         return;
       }
       setSheets((current) => current.map((item) => item.id === sheet.id ? data as CharacterSheet : item));
+      setDrafts((current) => clearSheetDraft(current, sheet.id, tab));
       setMessage(`${sheet.name} 시트를 저장했습니다.`);
     } catch {
       setError("캐릭터 시트 서버에 연결하지 못했습니다.");
     } finally {
+      setSavingSheetId("");
       setSaving(false);
     }
   }
@@ -230,7 +234,10 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
       const editField = (field: SheetField, value: string) => setDrafts((current) => updateSheetDraft(current, sheet.id, tab, field, value));
       return <details key={sheet.id}>
         <summary><strong>{sheet.name}</strong><span>{SHEET_SYSTEMS[sheet.system]?.label ?? sheet.system}</span></summary>
-        <div className="character-sheet-tabs" role="tablist" aria-label={`${sheet.name} 시트 항목`}>{Object.entries(SHEET_TABS).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTabs((current) => ({ ...current, [sheet.id]: value as SheetTab }))}>{label}</button>)}</div>
+        <div className="character-sheet-tabs" role="tablist" aria-label={`${sheet.name} 시트 항목`}>{Object.entries(SHEET_TABS).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={tab === value} disabled={savingSheetId === sheet.id} onClick={() => {
+          if (savingSheetId === sheet.id) return;
+          setTabs((current) => ({ ...current, [sheet.id]: value as SheetTab }));
+        }}>{label}</button>)}</div>
         {rollItems.length > 0 && <div className="character-sheet-rolls">
           <p className="muted">저장된 시트 값으로 검사합니다. 편집한 값은 먼저 저장하세요.</p>
           <label>굴림 공개 범위<select aria-label={`${sheet.name} 굴림 공개 범위`} value={visibility} onChange={(event) => setVisibility(event.target.value as "public" | "private")} disabled={saving || rolling}>

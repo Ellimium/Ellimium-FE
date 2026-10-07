@@ -11,3 +11,9 @@ export function updateSheetDraft(drafts: SheetDrafts, sheetId: string, tab: Shee
     },
   };
 }
+
+export function clearSheetDraft(drafts: SheetDrafts, sheetId: string, tab: SheetTab): SheetDrafts {
+  const remaining = { ...drafts[sheetId] };
+  delete remaining[tab];
+  return { ...drafts, [sheetId]: remaining };
+}
