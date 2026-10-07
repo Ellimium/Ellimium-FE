@@ -36,8 +36,9 @@ export function resolveRoomFeatureState(
   role: RoomRole | null,
   userId: string | null,
   rows: RoomFeaturePermission[],
+  checking = false,
 ): RoomFeatureState {
-  if (role === "master") {
+  if (role === "master" && !checking) {
     return Object.fromEntries(ROOM_FEATURES.map((feature) => [feature, true])) as RoomFeatureState;
   }
 
@@ -47,7 +48,9 @@ export function resolveRoomFeatureState(
   for (const feature of ROOM_FEATURES) {
     const participant = rows.find((row) => row.feature === feature && row.user_id === userId);
     const roleDefault = rows.find((row) => row.feature === feature && row.role === role);
-    state[feature] = participant?.allowed ?? roleDefault?.allowed ?? false;
+    // Keep read-only map visibility stable while writes wait for a fresh membership check.
+    state[feature] = (!checking || feature === "map_view")
+      && (role === "master" || (participant?.allowed ?? roleDefault?.allowed ?? false));
   }
   return state;
 }

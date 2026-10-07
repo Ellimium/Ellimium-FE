@@ -11,14 +11,14 @@ import { useRoomPermissions } from "./room-permissions";
 const CONFIGURABLE_ROLES = Object.keys(CONFIGURABLE_ROLE_NAMES) as ConfigurableRole[];
 
 export default function RoomFeaturePermissions() {
-  const { role, rows, loading, error, pendingKey, setRolePermission } = useRoomPermissions();
+  const { role, rows, loading, checking, error, pendingKey, setRolePermission } = useRoomPermissions();
   if (role !== "master") return null;
 
   return <section className="room-feature-permissions" aria-label="룸 기능 권한 설정">
     <details>
-      <summary><span><small>PERMISSIONS</small>기능 권한</span><em>{loading ? "불러오는 중" : "역할별 설정"}</em></summary>
+      <summary><span><small>PERMISSIONS</small>기능 권한</span><em>{loading || checking ? "확인 중" : "역할별 설정"}</em></summary>
       <div className="permission-role-list">
-        {CONFIGURABLE_ROLES.map((targetRole) => <fieldset key={targetRole} disabled={loading}>
+        {CONFIGURABLE_ROLES.map((targetRole) => <fieldset key={targetRole} disabled={loading || checking || Boolean(error)}>
           <legend>{CONFIGURABLE_ROLE_NAMES[targetRole]}</legend>
           {ROOM_FEATURES.map((feature) => {
             const key = `${targetRole}:${feature}`;

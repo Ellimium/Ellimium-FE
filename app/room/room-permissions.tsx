@@ -3,9 +3,8 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
+import { startRoomMembershipSync, type RoomMember } from "./room-membership";
 import {
-  isRoomFeaturePermission,
-  mergeRoomFeaturePermission,
   resolveRoomFeatureState,
   type ConfigurableRole,
   type RoomFeature,
@@ -20,6 +19,9 @@ type RoomPermissionsContextValue = {
   permissions: RoomFeatureState;
   rows: RoomFeaturePermission[];
   loading: boolean;
+  checking: boolean;
+  members: RoomMember[];
+  refreshMembership: () => Promise<void>;
   error: string;
   pendingKey: string;
   canUse: (feature: RoomFeature) => boolean;
@@ -27,93 +29,54 @@ type RoomPermissionsContextValue = {
 };
 
 const RoomPermissionsContext = createContext<RoomPermissionsContextValue | null>(null);
-const PERMISSION_FIELDS = "id, room_id, feature, role, user_id, allowed";
 
 export function RoomPermissionsProvider({ roomId, children }: { roomId?: string; children: ReactNode }) {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [role, setRole] = useState<RoomRole | null>(null);
   const [rows, setRows] = useState<RoomFeaturePermission[]>([]);
   const [loading, setLoading] = useState(Boolean(roomId));
+  const [checking, setChecking] = useState(Boolean(roomId));
+  const [members, setMembers] = useState<RoomMember[]>([]);
+  const [refreshMembership, setRefreshMembership] = useState<() => Promise<void>>(() => async () => {});
   const [error, setError] = useState("");
   const [pendingKey, setPendingKey] = useState("");
 
   useEffect(() => {
-    let active = true;
-
     if (!roomId) {
       setCurrentUserId(null);
       setRole(null);
       setRows([]);
+      setMembers([]);
       setLoading(false);
+      setChecking(false);
+      setError("");
+      setRefreshMembership(() => async () => {});
       return;
     }
 
-    async function load() {
-      setLoading(true);
-      setError("");
-
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!active) return;
-      if (!user) {
-        setError("룸 기능 권한을 확인할 수 없습니다.");
-        setLoading(false);
-        return;
-      }
-
-      const [memberResult, permissionResult] = await Promise.all([
-        supabase.from("room_members").select("role").eq("room_id", roomId).eq("user_id", user.id).eq("status", "active").maybeSingle(),
-        supabase.from("room_feature_permissions").select(PERMISSION_FIELDS).eq("room_id", roomId),
-      ]);
-
-      if (!active) return;
-      if (memberResult.error || permissionResult.error) {
-        setError("룸 기능 권한을 불러오지 못했습니다.");
-        setLoading(false);
-        return;
-      }
-
-      setCurrentUserId(user.id);
-      setRole((memberResult.data?.role as RoomRole | undefined) ?? null);
-      setRows((permissionResult.data ?? []).filter(isRoomFeaturePermission));
+    setLoading(true);
+    const sync = startRoomMembershipSync(supabase, roomId, (view) => {
+      setChecking(view.checking);
+      if (view.checking) return;
+      setCurrentUserId(view.userId);
+      setRole(view.role);
+      setRows(view.rows);
+      setMembers((current) => JSON.stringify(current) === JSON.stringify(view.members) ? current : view.members);
+      setError(view.error);
       setLoading(false);
-    }
-
-    void load();
-    return () => { active = false; };
-  }, [roomId]);
-
-  useEffect(() => {
-    if (!roomId) return;
-
-    const channel = supabase
-      .channel(`room:${roomId}:feature-permissions`)
-      .on("postgres_changes", {
-        event: "*",
-        schema: "public",
-        table: "room_feature_permissions",
-        filter: `room_id=eq.${roomId}`,
-      }, ({ new: changed }) => {
-        if (isRoomFeaturePermission(changed)) {
-          setRows((current) => mergeRoomFeaturePermission(current, changed));
-        }
-      })
-      .subscribe((status) => {
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          setError("기능 권한 실시간 변경을 받을 수 없습니다.");
-        }
-      });
-
-    return () => { void supabase.removeChannel(channel); };
+    }, { window, document });
+    setRefreshMembership(() => sync.refresh);
+    return sync.dispose;
   }, [roomId]);
 
   const permissions = useMemo(
-    () => resolveRoomFeatureState(role, currentUserId, rows),
-    [currentUserId, role, rows],
+    () => resolveRoomFeatureState(loading || error ? null : role, currentUserId, rows, checking),
+    [checking, currentUserId, error, loading, role, rows],
   );
   const canUse = useCallback((feature: RoomFeature) => permissions[feature], [permissions]);
 
   const setRolePermission = useCallback(async (targetRole: ConfigurableRole, feature: RoomFeature, allowed: boolean) => {
-    if (!roomId || role !== "master") return;
+    if (!roomId || role !== "master" || loading || checking || error) return;
 
     const key = `${targetRole}:${feature}`;
     setPendingKey(key);
@@ -138,7 +101,7 @@ export function RoomPermissionsProvider({ roomId, children }: { roomId?: string;
     } finally {
       setPendingKey("");
     }
-  }, [role, roomId]);
+  }, [checking, error, loading, role, roomId]);
 
   const value = useMemo(() => ({
     currentUserId,
@@ -146,11 +109,14 @@ export function RoomPermissionsProvider({ roomId, children }: { roomId?: string;
     permissions,
     rows,
     loading,
+    checking,
+    members,
+    refreshMembership,
     error,
     pendingKey,
     canUse,
     setRolePermission,
-  }), [canUse, currentUserId, error, loading, pendingKey, permissions, role, rows, setRolePermission]);
+  }), [canUse, checking, currentUserId, error, loading, members, pendingKey, permissions, refreshMembership, role, rows, setRolePermission]);
 
   return <RoomPermissionsContext.Provider value={value}>{children}</RoomPermissionsContext.Provider>;
 }
