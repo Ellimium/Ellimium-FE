@@ -18,7 +18,6 @@ import { hideArea, rectangleFromPoints, type VisibilityArea } from "./map-visibi
 import { useRoomPermissions } from "./room-permissions";
 import { gridCoordinate, mapPointFromClient } from "./token-position";
 
-type Role = "master" | "player" | "spectator";
 type RoomMapRow = {
   id: string;
   asset_id: string;
@@ -62,15 +61,15 @@ const DRAWING_LABELS: Record<DrawingType, string> = {
 };
 
 export default function RoomMap({ roomId }: { roomId?: string }) {
-  const { canUse, loading: permissionLoading } = useRoomPermissions();
+  const { role, currentUserId, members, checking, error: permissionError, canUse, loading: permissionLoading } = useRoomPermissions();
   const canViewMap = !permissionLoading && canUse("map_view");
-  const canMoveTokens = canViewMap && canUse("token_move");
+  const canMoveTokens = canViewMap && canUse("token_move") && (role === "master" || role === "player");
   const [maps, setMaps] = useState<DisplayMap[]>([]);
   const [tokens, setTokens] = useState<DisplayToken[]>([]);
   const [tokenAssets, setTokenAssets] = useState<TokenAsset[]>([]);
   const [players, setPlayers] = useState<PlayerOption[]>([]);
-  const [currentUserId, setCurrentUserId] = useState("");
-  const [role, setRole] = useState<Role | null>(null);
+  const [loadedRole, setLoadedRole] = useState<typeof role>(null);
+  const canManageMap = role === "master" && !permissionLoading && !checking && !permissionError && loadedRole === role;
   const canDraw = canEditMapDrawing(canViewMap, canUse("drawing"), role);
   const [selectedId, setSelectedId] = useState("");
   const [mapSize, setMapSize] = useState<{ width: number; height: number } | null>(null);
@@ -121,35 +120,24 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     async function load() {
       setLoading(true);
       setError("");
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user || !active) {
-        if (active) setLoading(false);
-        return;
-      }
-
-      const [{ data: roomMaps, error: roomMapError }, { data: members, error: memberError }] = await Promise.all([
-        supabase.from("room_maps").select("id, asset_id, grid_cell_size, grid_offset_x, grid_offset_y, fog_enabled").eq("room_id", roomId).order("created_at"),
-        supabase.from("room_members").select("user_id, role").eq("room_id", roomId).eq("status", "active"),
-      ]);
-
+      if (!currentUserId || !role) { setLoading(false); return; }
+      const { data: roomMaps, error: roomMapError } = await supabase.from("room_maps")
+        .select("id, asset_id, grid_cell_size, grid_offset_x, grid_offset_y, fog_enabled").eq("room_id", roomId).order("created_at");
       if (!active) return;
-      if (roomMapError || memberError) {
-        setError("룸 맵과 토큰 권한을 불러올 수 없습니다.");
+      if (roomMapError) {
+        setError("룸 맵을 불러올 수 없습니다.");
         setLoading(false);
         return;
       }
-
-      const memberList = (members ?? []) as { user_id: string; role: Role }[];
-      const currentRole = memberList.find((member) => member.user_id === user.id)?.role ?? null;
-      const playerIds = memberList.filter((member) => member.role === "player").map((member) => member.user_id);
+      const playerIds = members.filter((member) => member.role === "player").map((member) => member.user_id);
       const mapList = (roomMaps ?? []) as RoomMapRow[];
 
       const [{ data: profiles, error: profileError }, { data: ownedTokenAssets, error: tokenAssetError }, { data: roomTokens, error: tokenError }, { data: mapVisibility, error: visibilityError }] = await Promise.all([
         playerIds.length
           ? supabase.from("profiles").select("user_id, nickname").in("user_id", playerIds)
           : Promise.resolve({ data: [], error: null }),
-        currentRole === "master"
-          ? supabase.from("assets").select("id, storage_path").eq("category", "token").eq("owner_id", user.id).order("created_at", { ascending: false })
+        role === "master"
+          ? supabase.from("assets").select("id, storage_path").eq("category", "token").eq("owner_id", currentUserId).order("created_at", { ascending: false })
           : Promise.resolve({ data: [], error: null }),
         mapList.length
           ? supabase.from("room_tokens").select("id, map_id, owner_id, image_asset_id, name, x, y, size").in("map_id", mapList.map((map) => map.id)).order("created_at")
@@ -206,8 +194,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         return asset && mapUrl ? [{ ...map, mapUrl, thumbnailUrl: asset.thumbnail_storage_path ? urls.get(asset.thumbnail_storage_path) ?? undefined : undefined }] : [];
       });
 
-      setCurrentUserId(user.id);
-      setRole(currentRole);
+      setLoadedRole(role);
       setPlayers(playerIds.map((userId) => ({
         userId,
         nickname: profiles?.find((profile) => profile.user_id === userId)?.nickname ?? userId,
@@ -228,12 +215,14 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     }
 
     window.addEventListener("room-map-registered", refresh);
-    void load();
+    void load().catch(() => {
+      if (active) { setError("룸 맵 서버에 연결하지 못했습니다."); setLoading(false); }
+    });
     return () => {
       active = false;
       window.removeEventListener("room-map-registered", refresh);
     };
-  }, [canViewMap, permissionLoading, roomId]);
+  }, [canViewMap, currentUserId, members, permissionLoading, role, roomId]);
 
   useEffect(() => { setMapSize(null); }, [selectedId]);
 
@@ -363,7 +352,22 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       });
 
     return () => { void supabase.removeChannel(channel); };
-  }, [canViewMap, selectedId]);
+  }, [canViewMap, role, selectedId]);
+
+  useEffect(() => {
+    setDragging(null);
+    setDrawingDrag(null);
+    setFogDragging(null);
+  }, [currentUserId, role]);
+
+  useEffect(() => {
+    if (!canMoveTokens) {
+      if (dragging) setTokens((current) => current.map((token) => token.id === dragging.tokenId ? { ...token, x: dragging.startX, y: dragging.startY } : token));
+      setDragging(null);
+    }
+    if (!canDraw) setDrawingDrag(null);
+    if (!canManageMap) setFogDragging(null);
+  }, [canDraw, canManageMap, canMoveTokens, dragging]);
 
   function broadcastPosition(tokenId: string, x: number, y: number) {
     void channelRef.current?.send({ type: "broadcast", event: "token-move", payload: { token_id: tokenId, x, y } });
@@ -467,7 +471,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
 
   async function createToken(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedId) return;
+    if (!selectedId || !canManageMap || busy) return;
 
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
@@ -508,7 +512,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }
 
   async function setFogEnabled(enabled: boolean) {
-    if (!selected || role !== "master") return;
+    if (!selected || !canManageMap || fogBusy) return;
     setFogBusy(true);
     setError("");
     const { error: fogError } = await supabase.rpc("set_map_fog_enabled", {
@@ -532,7 +536,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }
 
   async function saveVisibility(areas: VisibilityArea[]) {
-    if (!selected || role !== "master") return;
+    if (!selected || !canManageMap || fogBusy) return;
     setFogBusy(true);
     setError("");
     const existing = targetRow(selected.id, visibilityTarget);
@@ -553,7 +557,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }
 
   async function restoreCommonVisibility() {
-    if (!selected || visibilityTarget === "all") return;
+    if (!selected || !canManageMap || fogBusy || visibilityTarget === "all") return;
     const existing = targetRow(selected.id, visibilityTarget);
     if (!existing) return;
     setFogBusy(true);
@@ -576,19 +580,19 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
 
   function startFogDrag(event: PointerEvent<SVGRectElement>) {
     const point = fogPoint(event);
-    if (!point || fogBusy) return;
+    if (!canManageMap || !point || fogBusy) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     setFogDragging({ pointerId: event.pointerId, start: point, current: point });
   }
 
   function moveFogDrag(event: PointerEvent<SVGRectElement>) {
-    if (!fogDragging || event.pointerId !== fogDragging.pointerId) return;
+    if (!canManageMap || !fogDragging || event.pointerId !== fogDragging.pointerId) return;
     const point = fogPoint(event);
     if (point) setFogDragging((current) => current ? { ...current, current: point } : null);
   }
 
   function finishFogDrag(event: PointerEvent<SVGRectElement>) {
-    if (!selected || !mapSize || !fogDragging || event.pointerId !== fogDragging.pointerId) return;
+    if (!canManageMap || !selected || !mapSize || !fogDragging || event.pointerId !== fogDragging.pointerId) return;
     const area = rectangleFromPoints(fogDragging.start, fogPoint(event) ?? fogDragging.current, mapSize);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     setFogDragging(null);
@@ -709,7 +713,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     }
   }
 
-  const selected = maps.find((map) => map.id === selectedId);
+  const selected = canViewMap && loadedRole === role ? maps.find((map) => map.id === selectedId) : undefined;
   const selectedTokens = tokens.filter((token) => token.map_id === selectedId);
   const selectedDrawings = drawings.filter((drawing) => drawing.map_id === selectedId);
   // ponytail: 그리드 미설정 맵은 50px 셀로 표시하며 자유 배치가 필요해지면 픽셀 좌표 모드를 분리한다.
@@ -721,7 +725,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     : !canMoveTokens
       ? "토큰 이동 불가"
       : role === "master" ? "모든 토큰 조작" : "내 토큰 조작";
-  const audience = role === "master" ? visibilityTarget : role === "player" ? currentUserId : "all";
+  const audience = role === "master" ? visibilityTarget : role === "player" ? currentUserId ?? "all" : "all";
   const revealedAreas = selected ? visibleAreas(selected.id, audience) : [];
   const previewArea = fogDragging && mapSize ? rectangleFromPoints(fogDragging.start, fogDragging.current, mapSize) : null;
   const drawingPreview = drawingDrag
@@ -794,7 +798,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         />}
         {drawingPreview && <MapDrawingShape drawing={drawingPreview} />}
         {selected.fog_enabled && role === "master" && <rect className="fog-overlay" width={mapSize.width} height={mapSize.height} mask={`url(#${overlayMaskId})`} />}
-        {selected.fog_enabled && role === "master" && fogEditing && <rect
+        {selected.fog_enabled && canManageMap && fogEditing && <rect
           className="fog-interaction"
           width={mapSize.width}
           height={mapSize.height}
@@ -849,22 +853,22 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       {selected && role === "master" && <details className="fog-controls" onToggle={(event) => setFogEditing(event.currentTarget.open)}>
         <summary>Fog of War</summary>
         <div aria-busy={fogBusy}>
-          <button type="button" disabled={fogBusy} onClick={() => void setFogEnabled(!selected.fog_enabled)}>{selected.fog_enabled ? "Fog 끄기" : "Fog 켜기"}</button>
-          <label>대상<select value={visibilityTarget} disabled={fogBusy} onChange={(event) => setVisibilityTarget(event.target.value)}><option value="all">전체 플레이어</option>{players.map((player) => <option key={player.userId} value={player.userId}>{player.nickname}</option>)}</select></label>
-          <fieldset><legend>드래그 동작</legend><label><input type="radio" name="fogMode" checked={fogMode === "reveal"} onChange={() => setFogMode("reveal")} />공개</label><label><input type="radio" name="fogMode" checked={fogMode === "hide"} onChange={() => setFogMode("hide")} />가리기</label></fieldset>
-          {visibilityTarget !== "all" && <button type="button" disabled={fogBusy || !targetRow(selected.id, visibilityTarget) || targetRow(selected.id, visibilityTarget)?.inherits_common} onClick={() => void restoreCommonVisibility()}>공통 시야 사용</button>}
+          <button type="button" disabled={fogBusy || !canManageMap} onClick={() => void setFogEnabled(!selected.fog_enabled)}>{selected.fog_enabled ? "Fog 끄기" : "Fog 켜기"}</button>
+          <label>대상<select value={visibilityTarget} disabled={fogBusy || !canManageMap} onChange={(event) => setVisibilityTarget(event.target.value)}><option value="all">전체 플레이어</option>{players.map((player) => <option key={player.userId} value={player.userId}>{player.nickname}</option>)}</select></label>
+          <fieldset disabled={!canManageMap}><legend>드래그 동작</legend><label><input type="radio" name="fogMode" checked={fogMode === "reveal"} onChange={() => setFogMode("reveal")} />공개</label><label><input type="radio" name="fogMode" checked={fogMode === "hide"} onChange={() => setFogMode("hide")} />가리기</label></fieldset>
+          {visibilityTarget !== "all" && <button type="button" disabled={fogBusy || !canManageMap || !targetRow(selected.id, visibilityTarget) || targetRow(selected.id, visibilityTarget)?.inherits_common} onClick={() => void restoreCommonVisibility()}>공통 시야 사용</button>}
           <small>{selected.fog_enabled ? "맵을 드래그해 영역을 변경하세요." : "영역을 편집하려면 Fog를 켜세요."}</small>
         </div>
       </details>}
       {selected && role === "master" && <details className="token-creator">
         <summary>토큰 추가</summary>
         <form onSubmit={createToken} aria-busy={busy}>
-          <label>이름<input name="name" required maxLength={50} disabled={busy} /></label>
-          <label>이미지<select name="imageAssetId" defaultValue="" disabled={busy}><option value="">이미지 없음</option>{tokenAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.storage_path.split("/").at(-1)}</option>)}</select></label>
-          <label>소유자<select name="ownerId" defaultValue="" disabled={busy}><option value="">미할당</option>{players.map((player) => <option key={player.userId} value={player.userId}>{player.nickname}</option>)}</select></label>
-          <div><label>X<input name="x" type="number" step="any" defaultValue="0" required disabled={busy} /></label><label>Y<input name="y" type="number" step="any" defaultValue="0" required disabled={busy} /></label><label>크기<input name="size" type="number" min="0.25" step="0.25" defaultValue="1" required disabled={busy} /></label></div>
+          <label>이름<input name="name" required maxLength={50} disabled={busy || !canManageMap} /></label>
+          <label>이미지<select name="imageAssetId" defaultValue="" disabled={busy || !canManageMap}><option value="">이미지 없음</option>{tokenAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.storage_path.split("/").at(-1)}</option>)}</select></label>
+          <label>소유자<select name="ownerId" defaultValue="" disabled={busy || !canManageMap}><option value="">미할당</option>{players.map((player) => <option key={player.userId} value={player.userId}>{player.nickname}</option>)}</select></label>
+          <div><label>X<input name="x" type="number" step="any" defaultValue="0" required disabled={busy || !canManageMap} /></label><label>Y<input name="y" type="number" step="any" defaultValue="0" required disabled={busy || !canManageMap} /></label><label>크기<input name="size" type="number" min="0.25" step="0.25" defaultValue="1" required disabled={busy || !canManageMap} /></label></div>
           {message && <p className="form-message" role="status">{message}</p>}
-          <button className="primary-button" type="submit" disabled={busy}>{busy ? "배치 중…" : "배치"}</button>
+          <button className="primary-button" type="submit" disabled={busy || !canManageMap}>{busy ? "배치 중…" : "배치"}</button>
         </form>
       </details>}
       {loading && <p className="map-notice">룸 맵을 불러오는 중…</p>}

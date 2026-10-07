@@ -5,12 +5,15 @@ import { FormEvent, useEffect, useState } from "react";
 
 import type { Asset } from "../assets/asset-images";
 import { supabase } from "@/lib/supabase/client";
+import { useRoomPermissions } from "./room-permissions";
 
 type MapAsset = Pick<Asset, "id" | "storage_path">;
 
 export default function MapRegistration({ roomId }: { roomId?: string }) {
   const [assets, setAssets] = useState<MapAsset[]>([]);
-  const [isMaster, setIsMaster] = useState<boolean | null>(null);
+  const { role, currentUserId, loading: permissionLoading, checking, error: permissionError } = useRoomPermissions();
+  const isMaster = role === "master";
+  const canRegister = isMaster && !permissionLoading && !checking && !permissionError;
   const [loading, setLoading] = useState(Boolean(roomId));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -19,47 +22,20 @@ export default function MapRegistration({ roomId }: { roomId?: string }) {
   useEffect(() => {
     let active = true;
 
-    if (!roomId) {
+    if (!roomId || !isMaster || !currentUserId || permissionLoading) {
+      setAssets([]);
       setLoading(false);
       return;
     }
 
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!active) return;
-      if (!user) {
-        setIsMaster(false);
-        setLoading(false);
-        return;
-      }
-
-      const { data: member, error: memberError } = await supabase
-        .from("room_members")
-        .select("role")
-        .eq("room_id", roomId)
-        .eq("user_id", user.id)
-        .eq("status", "active")
-        .maybeSingle();
-
-      if (!active) return;
-      if (memberError) {
-        setError("맵 등록 권한을 확인할 수 없습니다.");
-        setLoading(false);
-        return;
-      }
-
-      const master = member?.role === "master";
-      setIsMaster(master);
-      if (!master) {
-        setLoading(false);
-        return;
-      }
-
+      setLoading(true);
+      setError("");
       const { data, error: assetError } = await supabase
         .from("assets")
         .select("id, storage_path")
         .eq("category", "map")
-        .eq("owner_id", user.id)
+        .eq("owner_id", currentUserId)
         .order("created_at", { ascending: false });
 
       if (!active) return;
@@ -68,13 +44,15 @@ export default function MapRegistration({ roomId }: { roomId?: string }) {
       setLoading(false);
     }
 
-    void load();
+    void load().catch(() => {
+      if (active) { setError("맵 자산 서버에 연결하지 못했습니다."); setLoading(false); }
+    });
     return () => { active = false; };
-  }, [roomId]);
+  }, [currentUserId, isMaster, permissionLoading, roomId]);
 
   async function register(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!roomId) return;
+    if (!roomId || !canRegister || loading || busy) return;
 
     const form = new FormData(event.currentTarget);
     const number = (name: string) => {
@@ -115,10 +93,10 @@ export default function MapRegistration({ roomId }: { roomId?: string }) {
     {error && <p className="form-error" role="alert">{error}</p>}
     {!loading && isMaster === false && <p className="muted">맵 등록은 마스터만 할 수 있습니다.</p>}
     {!loading && isMaster && (assets.length ? <form onSubmit={register}>
-      <label>맵 자산<select name="assetId" required disabled={busy}>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.storage_path.split("/").at(-1)}</option>)}</select></label>
-      <div className="map-grid-inputs"><label>셀 크기<input name="gridCellSize" type="number" min="1" inputMode="numeric" placeholder="선택" disabled={busy} /></label><label>X 오프셋<input name="gridOffsetX" type="number" inputMode="numeric" placeholder="선택" disabled={busy} /></label><label>Y 오프셋<input name="gridOffsetY" type="number" inputMode="numeric" placeholder="선택" disabled={busy} /></label></div>
+      <label>맵 자산<select name="assetId" required disabled={busy || !canRegister}>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.storage_path.split("/").at(-1)}</option>)}</select></label>
+      <div className="map-grid-inputs"><label>셀 크기<input name="gridCellSize" type="number" min="1" inputMode="numeric" placeholder="선택" disabled={busy || !canRegister} /></label><label>X 오프셋<input name="gridOffsetX" type="number" inputMode="numeric" placeholder="선택" disabled={busy || !canRegister} /></label><label>Y 오프셋<input name="gridOffsetY" type="number" inputMode="numeric" placeholder="선택" disabled={busy || !canRegister} /></label></div>
       {message && <p className="form-message" role="status">{message}</p>}
-      <button className="primary-button" type="submit" disabled={busy}>{busy ? "등록 중…" : "맵 등록"}</button>
+      <button className="primary-button" type="submit" disabled={busy || !canRegister}>{busy ? "등록 중…" : "맵 등록"}</button>
     </form> : <p className="muted">등록할 맵 자산이 없습니다. <Link href="/assets">맵 자산을 업로드하세요.</Link></p>)}
   </section>;
 }

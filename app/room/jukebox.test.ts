@@ -145,7 +145,6 @@ test("룸 변경 중 RPC 완료는 이전 룸을 다시 조회하거나 갱신�
 
 function clientStub() {
   const filters: unknown[][] = [];
-  let member: unknown = { role: "master" };
   let row: unknown = state;
   let queryError: unknown = null;
   let rpcError: { code: string } | null = null;
@@ -159,7 +158,7 @@ function clientStub() {
       const query = {
         select(fields: string) { filters.push([table, "select", fields]); return this; },
         eq(column: string, value: string) { filters.push([table, column, value]); return this; },
-        maybeSingle: async () => ({ data: table === "room_members" ? member : row, error: queryError }),
+        maybeSingle: async () => ({ data: row, error: queryError }),
       }; return query;
     },
     rpc: async (...args: unknown[]) => { rpcCalls.push(args); return { error: rpcError }; },
@@ -167,22 +166,22 @@ function clientStub() {
     removeChannel: async () => { removed++; },
   } as unknown as SupabaseClient;
   return { client, filters, rpcCalls, events, get removed() { return removed; },
-    setMember(value: unknown) { member = value; }, setRow(value: unknown) { row = value; },
+    setRow(value: unknown) { row = value; },
     failQuery() { queryError = {}; }, failRpc(code: string) { rpcError = { code }; } };
 }
-test("API는 현재 로그인 사용자의 활성 구성원 권한과 해당 룸 상태만 조회한다", async () => {
-  const h = clientStub(); const api = jukeboxAccess(h.client, "room-a");
+test("API는 공통 멤버십 역할과 해당 룸 상태만 조회한다", async () => {
+  const h = clientStub(); let role: "master" | "spectator" | null = "master";
+  const api = jukeboxAccess(h.client, "room-a", () => role);
   assert.deepEqual(await api.read(), { state, role: "master" });
-  assert.ok(h.filters.some((f) => f.join() === "room_members,user_id,user-a"));
-  assert.ok(h.filters.some((f) => f.join() === "room_members,status,active"));
+  assert.equal(h.filters.some(([table]) => table === "room_members"), false);
   assert.ok(h.filters.some((f) => f.join() === "room_jukebox_states,room_id,room-a"));
-  h.setMember(null); assert.deepEqual(await api.read(), { state: null, role: null });
-  h.setMember({ role: "spectator" }); h.setRow(null); assert.deepEqual(await api.read(), { role: "spectator", state: null });
+  role = null; assert.deepEqual(await api.read(), { state: null, role: null });
+  role = "spectator"; h.setRow(null); assert.deepEqual(await api.read(), { role: "spectator", state: null });
   h.setRow({ ...state, room_id: "other-room" }); await assert.rejects(api.read());
   h.failQuery(); await assert.rejects(api.read());
 });
 test("API는 BE RPC·INSERT/UPDATE 룸 필터를 사용하고 구독을 제거한다", async () => {
-  const h = clientStub(); const api = jukeboxAccess(h.client, "room-a");
+  const h = clientStub(); const api = jukeboxAccess(h.client, "room-a", () => "master");
   await api.control({ action: "set_loop", loopEnabled: false });
   assert.deepEqual(h.rpcCalls, [["control_room_jukebox", { target_room_id: "room-a", action: "set_loop", target_loop_enabled: false }]]);
   for (const code of ["42501", "23514", "22023", "unknown"]) {
@@ -206,4 +205,15 @@ test("로그아웃 중 완료된 이전 RPC는 상태를 재조회하지 않는�
   const pending = h.sync.control({ action: "pause" }); h.sync.leave();
   const count = h.views.length; const reads = h.reads; rpc.resolve(); await pending;
   assert.equal(h.views.length, count); assert.equal(h.reads, reads); assert.equal(h.view.state, null); h.sync.dispose();
+});
+
+
+test("주크박스도 공통 멤버십 역할을 사용하며 별도 역할 조회를 하지 않는다", async () => {
+  const h = clientStub();
+  let role: "master" | "spectator" | null = "spectator";
+  const api = jukeboxAccess(h.client, "room-a", () => role);
+  assert.equal((await api.read()).role, "spectator");
+  assert.equal(h.filters.some(([table]) => table === "room_members"), false);
+  role = "master"; assert.equal((await api.read()).role, "master");
+  role = null; assert.deepEqual(await api.read(), { state: null, role: null });
 });

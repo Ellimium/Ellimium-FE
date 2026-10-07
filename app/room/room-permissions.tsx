@@ -2,6 +2,8 @@
 
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
+import { useRouter } from "next/navigation";
+import { isRoomAccessEnded, ROOM_ACCESS_ENDED_URL } from "./room-access";
 import { supabase } from "@/lib/supabase/client";
 import { startRoomMembershipSync, type RoomMember } from "./room-membership";
 import {
@@ -31,6 +33,8 @@ type RoomPermissionsContextValue = {
 const RoomPermissionsContext = createContext<RoomPermissionsContextValue | null>(null);
 
 export function RoomPermissionsProvider({ roomId, children }: { roomId?: string; children: ReactNode }) {
+  const router = useRouter();
+  const [endedRoomId, setEndedRoomId] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [role, setRole] = useState<RoomRole | null>(null);
   const [rows, setRows] = useState<RoomFeaturePermission[]>([]);
@@ -54,6 +58,7 @@ export function RoomPermissionsProvider({ roomId, children }: { roomId?: string;
       return;
     }
 
+    setEndedRoomId(null);
     setLoading(true);
     const sync = startRoomMembershipSync(supabase, roomId, (view) => {
       setChecking(view.checking);
@@ -64,10 +69,16 @@ export function RoomPermissionsProvider({ roomId, children }: { roomId?: string;
       setMembers((current) => JSON.stringify(current) === JSON.stringify(view.members) ? current : view.members);
       setError(view.error);
       setLoading(false);
+      if (isRoomAccessEnded(view)) setEndedRoomId(roomId);
     }, { window, document });
     setRefreshMembership(() => sync.refresh);
     return sync.dispose;
   }, [roomId]);
+
+  const accessEnded = Boolean(roomId && endedRoomId === roomId);
+  useEffect(() => {
+    if (accessEnded) router.replace(ROOM_ACCESS_ENDED_URL);
+  }, [accessEnded, router]);
 
   const permissions = useMemo(
     () => resolveRoomFeatureState(loading || error ? null : role, currentUserId, rows, checking),
@@ -117,6 +128,8 @@ export function RoomPermissionsProvider({ roomId, children }: { roomId?: string;
     canUse,
     setRolePermission,
   }), [canUse, checking, currentUserId, error, loading, members, pendingKey, permissions, refreshMembership, role, rows, setRolePermission]);
+
+  if (accessEnded) return <main className="lobby-shell"><p className="form-error" role="alert">룸 참가가 종료되었습니다. 로비로 이동합니다.</p></main>;
 
   return <RoomPermissionsContext.Provider value={value}>{children}</RoomPermissionsContext.Provider>;
 }

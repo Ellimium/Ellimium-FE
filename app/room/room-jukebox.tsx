@@ -4,6 +4,7 @@ import { FunctionsHttpError } from "@supabase/supabase-js";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { emptyJukeboxAudio, startJukeboxAudio, type JukeboxAudioView } from "./jukebox-audio";
+import { useRoomPermissions } from "./room-permissions";
 import { emptyJukeboxView, jukeboxAccess, startJukeboxSync, type JukeboxCommand, type JukeboxView } from "./jukebox";
 
 type ContextValue = JukeboxView & {
@@ -18,13 +19,17 @@ type ContextValue = JukeboxView & {
 const RoomJukeboxContext = createContext<ContextValue | null>(null);
 
 export function RoomJukeboxProvider({ roomId, children }: { roomId?: string; children: ReactNode }) {
+  const membership = useRoomPermissions();
+  const membershipRef = useRef(membership);
+  membershipRef.current = membership;
+  const { role, checking, loading: membershipLoading, error: membershipError } = membership;
   const [view, setView] = useState(() => emptyJukeboxView(Boolean(roomId)));
   const [audioView, setAudioView] = useState(emptyJukeboxAudio);
   const audio = useRef<ReturnType<typeof startJukeboxAudio> | null>(null);
   const sync = useRef<ReturnType<typeof startJukeboxSync> | null>(null);
   useEffect(() => {
     if (!roomId) return;
-    const current = startJukeboxSync(jukeboxAccess(supabase, roomId), setView, { window, document });
+    const current = startJukeboxSync(jukeboxAccess(supabase, roomId, () => membershipRef.current.role), setView, { window, document });
     sync.current = current;
     // Defer reads outside the auth callback to avoid locking Auth internals.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
@@ -37,6 +42,7 @@ export function RoomJukeboxProvider({ roomId, children }: { roomId?: string; chi
       subscription.unsubscribe();
     };
   }, [roomId]);
+  useEffect(() => { void sync.current?.refresh(); }, [role]);
   useEffect(() => {
     if (!roomId) return;
     const element = new Audio();
@@ -54,14 +60,18 @@ export function RoomJukeboxProvider({ roomId, children }: { roomId?: string; chi
     audio.current = current;
     return () => { audio.current = null; current.dispose(); };
   }, [roomId]);
-  useEffect(() => { audio.current?.update(view.role ? view.state : null); }, [view.role, view.state]);
+  useEffect(() => { audio.current?.update(role && !membershipError ? view.state : null); }, [membershipError, role, view.state]);
   const activateAudio = useCallback(() => { audio.current?.activate(); }, []);
   const retryAudio = useCallback(() => { audio.current?.retry(); }, []);
   const setVolume = useCallback((value: number) => { audio.current?.setVolume(value); }, []);
   const setMuted = useCallback((value: boolean) => { audio.current?.setMuted(value); }, []);
   const refresh = useCallback(async () => { await sync.current?.refresh(); }, []);
-  const control = useCallback(async (command: JukeboxCommand) => { await sync.current?.control(command); }, []);
-  return <RoomJukeboxContext.Provider value={{ ...view, audio: audioView, activateAudio, retryAudio, setVolume, setMuted, refresh, control }}>{children}</RoomJukeboxContext.Provider>;
+  const control = useCallback(async (command: JukeboxCommand) => {
+    const current = membershipRef.current;
+    if (current.role !== "master" || current.loading || current.checking || current.error) return;
+    await sync.current?.control(command);
+  }, []);
+  return <RoomJukeboxContext.Provider value={{ ...view, role: membershipError ? null : role, loading: view.loading || membershipLoading || checking, audio: audioView, activateAudio, retryAudio, setVolume, setMuted, refresh, control }}>{children}</RoomJukeboxContext.Provider>;
 }
 
 export function useRoomJukebox() {

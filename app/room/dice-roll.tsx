@@ -8,8 +8,6 @@ import type { DiceRollLog, DiceSort, DiceVisibility } from "./dice-log";
 import { supabase } from "@/lib/supabase/client";
 import { useRoomPermissions } from "./room-permissions";
 
-type Role = "master" | "player" | "spectator";
-type Member = { user_id: string; role: Role };
 type Profile = { user_id: string; nickname: string };
 
 const dateTime = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
@@ -17,8 +15,8 @@ const ROLL_FIELDS = "id, room_id, roller_id, expression, individual_results, tot
 const NOTIFICATION_FIELDS = "id, room_id, roller_id, visibility, created_at";
 
 export default function DiceRoll({ roomId }: { roomId?: string }) {
-  const { canUse, loading: permissionLoading } = useRoomPermissions();
-  const [role, setRole] = useState<Role | null>(null);
+  const { role, currentUserId, members, canUse, loading: permissionLoading } = useRoomPermissions();
+  const [loadedRole, setLoadedRole] = useState<typeof role>(null);
   const [rolls, setRolls] = useState<DiceRollLog[]>([]);
   const [rollerNames, setRollerNames] = useState<Record<string, string>>({});
   const [rollerFilter, setRollerFilter] = useState("");
@@ -34,33 +32,24 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
   useEffect(() => {
     let active = true;
 
-    if (!roomId) {
+    if (!roomId || !role || !currentUserId || permissionLoading) {
+      setRolls([]);
       setLoading(false);
       return;
     }
 
     async function load() {
-      setRole(null);
       setRolls([]);
       setRollerNames({});
       setLoading(true);
       setError("");
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!active) return;
-      if (!user) {
-        setError("주사위 권한을 확인할 수 없습니다.");
-        setLoading(false);
-        return;
-      }
-
-      const [memberResult, rollResult, notificationResult] = await Promise.all([
-        supabase.from("room_members").select("user_id, role").eq("room_id", roomId).eq("status", "active").order("joined_at"),
+      const [rollResult, notificationResult] = await Promise.all([
         supabase.from("dice_rolls").select(ROLL_FIELDS).eq("room_id", roomId).order("created_at", { ascending: false }),
         supabase.from("dice_roll_notifications").select(NOTIFICATION_FIELDS).eq("room_id", roomId).order("created_at", { ascending: false }),
       ]);
 
       if (!active) return;
-      if (memberResult.error || rollResult.error || notificationResult.error) {
+      if (rollResult.error || notificationResult.error) {
         setError("주사위 기록을 불러오지 못했습니다.");
         setLoading(false);
         return;
@@ -70,8 +59,7 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
         (notificationResult.data ?? []) as DiceRollLog[],
         (rollResult.data ?? []) as DiceRollLog[],
       );
-      const members = (memberResult.data ?? []) as Member[];
-      const rollerIds = [...new Set([user.id, ...members.map((member) => member.user_id), ...nextRolls.map((roll) => roll.roller_id)])];
+      const rollerIds = [...new Set([currentUserId, ...members.map((member) => member.user_id), ...nextRolls.map((roll) => roll.roller_id)])];
       const { data: profileData, error: profileError } = await supabase.from("profiles").select("user_id, nickname").in("user_id", rollerIds);
       if (!active) return;
       if (profileError) {
@@ -80,15 +68,17 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
         return;
       }
 
-      setRole(members.find((member) => member.user_id === user.id)?.role ?? null);
+      setLoadedRole(role);
       setRolls((current) => mergeDiceRolls(current, nextRolls));
       setRollerNames(Object.fromEntries(((profileData ?? []) as Profile[]).map((profile) => [profile.user_id, profile.nickname])));
       setLoading(false);
     }
 
-    void load();
+    void load().catch(() => {
+      if (active) { setError("주사위 서버에 연결하지 못했습니다."); setLoading(false); }
+    });
     return () => { active = false; };
-  }, [roomId]);
+  }, [currentUserId, members, permissionLoading, role, roomId]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -120,9 +110,9 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
     return () => { void supabase.removeChannel(channel); };
   }, [roomId]);
 
-  const canRoll = Boolean(role) && !permissionLoading && canUse("dice");
+  const canRoll = Boolean(role) && !loading && loadedRole === role && !permissionLoading && canUse("dice");
   const rollers = useMemo(() => [...new Set(rolls.map((roll) => roll.roller_id))].map((id) => ({ id, name: rollerNames[id] ?? "알 수 없는 사용자" })), [rolls, rollerNames]);
-  const visibleRolls = useMemo(() => visibleDiceRolls(rolls, rollerNames, rollerFilter, visibilityFilter, search, sort), [rolls, rollerNames, rollerFilter, visibilityFilter, search, sort]);
+  const visibleRolls = useMemo(() => visibleDiceRolls(loadedRole === role ? rolls : [], rollerNames, rollerFilter, visibilityFilter, search, sort), [loadedRole, role, rolls, rollerNames, rollerFilter, visibilityFilter, search, sort]);
 
   async function roll(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

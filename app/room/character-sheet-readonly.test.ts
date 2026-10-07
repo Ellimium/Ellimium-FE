@@ -20,8 +20,8 @@ const sheet = {
   notes: "첫 줄\n  <script>메모</script>", backstory: "북쪽 변경 출신.",
 };
 
-function renderSheet(role: string, userId: string, tab: SheetTab, sheets = [sheet]) {
-  const states = [false, "public", role, userId, sheets, { "sheet-a": tab },
+function renderSheet(role: string, userId: string, tab: SheetTab, sheets = [sheet], checking = false, loadedRole = role) {
+  const states = [false, "public", loadedRole, sheets, { "sheet-a": tab },
     { "sheet-a": { notes: { notes: "미저장 초안" } } }, "dnd_5e", false, false, "", "", ""];
   let stateIndex = 0;
   const exports: { default?: React.ComponentType<{ roomId: string }> } = {};
@@ -29,7 +29,7 @@ function renderSheet(role: string, userId: string, tab: SheetTab, sheets = [shee
     exports,
     require: (name: string) => {
       if (name === "react") return { ...React, useState: () => [states[stateIndex++], () => {}], useRef: () => ({ current: false }), useEffect: () => {} };
-      if (name === "./room-permissions") return { useRoomPermissions: () => ({ canUse: () => true, loading: false }) };
+      if (name === "./room-permissions") return { useRoomPermissions: () => ({ role, currentUserId: userId, checking, error: "", canUse: () => true, loading: false }) };
       if (name === "@/lib/supabase/client") return { supabase: {} };
       return require(name.startsWith("./") ? `${name}.ts` : name);
     },
@@ -82,4 +82,19 @@ test("RLS가 반환하지 않은 다른 시트나 관전자용 데이터를 생�
     const html = renderSheet(role, "player-b", "attributes", []);
     assert.doesNotMatch(html, /엘리온|STR=16|name="resources"|검사 굴리기|변경 저장/);
   }
+});
+
+
+test("재조회 중에도 미저장 초안은 유지하고 저장·굴림은 비활성화한다", () => {
+  const html = renderSheet("player", "player-a", "notes", [sheet], true);
+  assert.equal(textarea(html, "notes").value, "미저장 초안");
+  assert.match(textarea(html, "notes").attributes, /readOnly=""/);
+  for (const button of html.matchAll(/<button[^>]*>(변경 저장|변경 취소|시트 생성)<\/button>/g)) {
+    assert.match(button[0], /disabled=""/);
+  }
+});
+
+test("역할 변경 직후에는 이전 역할로 조회한 시트 데이터를 표시하지 않는다", () => {
+  const html = renderSheet("spectator", "player-a", "notes", [sheet], false, "player");
+  assert.doesNotMatch(html, /엘리온|미저장 초안|변경 저장/);
 });
