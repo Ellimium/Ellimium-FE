@@ -12,9 +12,9 @@ test("다섯 가지 도구와 색상·선 두께 선택 UI를 제공한다", () 
   assert.match(roomMap, /aria-label="선 두께"/);
 });
 
-test("그리기 권한이 있을 때만 편집 UI와 포인터 레이어를 표시한다", () => {
-  assert.match(roomMap, /selected && canDraw && <details className="drawing-controls"/);
-  assert.match(roomMap, /drawingEditing && canDraw && !fogEditing && <rect/);
+test("그리기 UI는 권한과 재확인 중인 기존 드래그를 기준으로 표시한다", () => {
+  assert.match(roomMap, /selected && \(canDraw \|\| \(checking && drawingDrag\)\) && <details className="drawing-controls"/);
+  assert.match(roomMap, /drawingEditing && \(canDraw \|\| \(checking && drawingDrag\)\) && !fogEditing && <rect/);
 });
 
 test("그림 CRUD와 private Broadcast 세 이벤트를 연결한다", () => {

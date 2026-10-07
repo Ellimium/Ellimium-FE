@@ -51,6 +51,10 @@ type VisibilityRow = {
 };
 type FogDrag = { pointerId: number; start: { x: number; y: number }; current: { x: number; y: number } };
 type DrawingDrag = { pointerId: number; points: DrawingPoint[] };
+type PendingDragEnd =
+  | { type: "token"; drag: DragState; position: { x: number; y: number } }
+  | { type: "drawing"; points: DrawingPoint[] }
+  | { type: "fog"; area: VisibilityArea };
 
 const DRAWING_LABELS: Record<DrawingType, string> = {
   line: "선",
@@ -94,6 +98,9 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const [selectedDrawingId, setSelectedDrawingId] = useState("");
   const [drawingBusy, setDrawingBusy] = useState(false);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const draggingRef = useRef(dragging);
+  draggingRef.current = dragging;
+  const pendingDragEnd = useRef<PendingDragEnd | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -229,6 +236,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   useEffect(() => {
     setSelectedDrawingId("");
     setDrawingDrag(null);
+    pendingDragEnd.current = null;
   }, [selectedId]);
 
   useEffect(() => {
@@ -280,6 +288,8 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
 
     return () => {
       active = false;
+      const drag = draggingRef.current;
+      if (drag) void channel.send({ type: "broadcast", event: "token-move", payload: { token_id: drag.tokenId, x: drag.startX, y: drag.startY } });
       channelRef.current = null;
       void supabase.removeChannel(channel);
     };
@@ -355,19 +365,37 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }, [canViewMap, role, selectedId]);
 
   useEffect(() => {
+    if (dragging) {
+      setTokens((current) => current.map((token) => token.id === dragging.tokenId ? { ...token, x: dragging.startX, y: dragging.startY } : token));
+      broadcastPosition(dragging.tokenId, dragging.startX, dragging.startY);
+    }
     setDragging(null);
     setDrawingDrag(null);
     setFogDragging(null);
+    pendingDragEnd.current = null;
   }, [currentUserId, role]);
 
   useEffect(() => {
+    if (checking) return;
     if (!canMoveTokens) {
-      if (dragging) setTokens((current) => current.map((token) => token.id === dragging.tokenId ? { ...token, x: dragging.startX, y: dragging.startY } : token));
+      if (dragging) {
+        setTokens((current) => current.map((token) => token.id === dragging.tokenId ? { ...token, x: dragging.startX, y: dragging.startY } : token));
+        broadcastPosition(dragging.tokenId, dragging.startX, dragging.startY);
+      }
       setDragging(null);
     }
     if (!canDraw) setDrawingDrag(null);
     if (!canManageMap) setFogDragging(null);
-  }, [canDraw, canManageMap, canMoveTokens, dragging]);
+  }, [checking, canDraw, canManageMap, canMoveTokens, dragging]);
+
+  useEffect(() => {
+    if (checking) return;
+    const end = pendingDragEnd.current;
+    pendingDragEnd.current = null;
+    if (end?.type === "token" && canMoveTokens) completeTokenDrag(end.drag, end.position);
+    if (end?.type === "drawing" && canDraw) { setDrawingDrag(null); void createDrawing(end.points); }
+    if (end?.type === "fog" && canManageMap) { setFogDragging(null); completeFogDrag(end.area); }
+  }, [checking, canDraw, canManageMap, canMoveTokens]);
 
   function broadcastPosition(tokenId: string, x: number, y: number) {
     void channelRef.current?.send({ type: "broadcast", event: "token-move", payload: { token_id: tokenId, x, y } });
@@ -432,13 +460,17 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }
 
   function finishDrag(event: PointerEvent<SVGSVGElement>) {
-    if (!canMoveTokens || !dragging || event.pointerId !== dragging.pointerId) return;
+    if ((!canMoveTokens && !checking) || !dragging || event.pointerId !== dragging.pointerId) return;
     const drag = dragging;
     const position = dragPosition(event.clientX, event.clientY, event.currentTarget, drag);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    setDragging(null);
-    if (!position) return;
+    if (!position) { setDragging(null); return; }
+    if (checking) { pendingDragEnd.current = { type: "token", drag, position }; return; }
+    completeTokenDrag(drag, position);
+  }
 
+  function completeTokenDrag(drag: DragState, position: { x: number; y: number }) {
+    setDragging(null);
     setTokens((current) => current.map((token) => token.id === drag.tokenId ? { ...token, ...position } : token));
     broadcastPosition(drag.tokenId, position.x, position.y);
     void persistPosition(drag.tokenId, position.x, position.y, drag.startX, drag.startY);
@@ -448,6 +480,8 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     if (!dragging || event.pointerId !== dragging.pointerId) return;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     setTokens((current) => current.map((token) => token.id === dragging.tokenId ? { ...token, x: dragging.startX, y: dragging.startY } : token));
+    broadcastPosition(dragging.tokenId, dragging.startX, dragging.startY);
+    pendingDragEnd.current = null;
     setDragging(null);
   }
 
@@ -592,11 +626,17 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }
 
   function finishFogDrag(event: PointerEvent<SVGRectElement>) {
-    if (!canManageMap || !selected || !mapSize || !fogDragging || event.pointerId !== fogDragging.pointerId) return;
+    if ((!canManageMap && !checking) || !selected || !mapSize || !fogDragging || event.pointerId !== fogDragging.pointerId) return;
     const area = rectangleFromPoints(fogDragging.start, fogPoint(event) ?? fogDragging.current, mapSize);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (!area) { setFogDragging(null); return; }
+    if (checking) { pendingDragEnd.current = { type: "fog", area }; return; }
     setFogDragging(null);
-    if (!area) return;
+    completeFogDrag(area);
+  }
+
+  function completeFogDrag(area: VisibilityArea) {
+    if (!selected) return;
     const current = visibleAreas(selected.id, visibilityTarget);
     void saveVisibility(fogMode === "reveal" ? [...current, area] : hideArea(current, area));
   }
@@ -671,6 +711,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       ? drawingType === "freehand" ? [...drawingDrag.points, point] : [drawingDrag.points[0], point]
       : drawingDrag.points;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (checking) { pendingDragEnd.current = { type: "drawing", points }; return; }
     setDrawingDrag(null);
     void createDrawing(points);
   }
@@ -787,30 +828,30 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
             </g>;
           })}
         </g>
-        {drawingEditing && canDraw && !fogEditing && <rect
+        {drawingEditing && (canDraw || (checking && drawingDrag)) && !fogEditing && <rect
           className="drawing-interaction"
           width={mapSize.width}
           height={mapSize.height}
           onPointerDown={startDrawing}
           onPointerMove={moveDrawing}
           onPointerUp={finishDrawing}
-          onPointerCancel={() => setDrawingDrag(null)}
+          onPointerCancel={() => { pendingDragEnd.current = null; setDrawingDrag(null); }}
         />}
         {drawingPreview && <MapDrawingShape drawing={drawingPreview} />}
         {selected.fog_enabled && role === "master" && <rect className="fog-overlay" width={mapSize.width} height={mapSize.height} mask={`url(#${overlayMaskId})`} />}
-        {selected.fog_enabled && canManageMap && fogEditing && <rect
+        {selected.fog_enabled && (canManageMap || (checking && fogDragging)) && fogEditing && <rect
           className="fog-interaction"
           width={mapSize.width}
           height={mapSize.height}
           onPointerDown={startFogDrag}
           onPointerMove={moveFogDrag}
           onPointerUp={finishFogDrag}
-          onPointerCancel={() => setFogDragging(null)}
+          onPointerCancel={() => { pendingDragEnd.current = null; setFogDragging(null); }}
         />}
         {previewArea && <rect className={`fog-preview fog-preview-${fogMode}`} {...previewArea} />}
       </svg>}
       {selected && <span className="token-permission">{permissionText}</span>}
-      {selected && canDraw && <details className="drawing-controls" onToggle={(event) => {
+      {selected && (canDraw || (checking && drawingDrag)) && <details className="drawing-controls" onToggle={(event) => {
         setDrawingEditing(event.currentTarget.open);
         if (!event.currentTarget.open) setDrawingDrag(null);
       }}>
@@ -821,21 +862,21 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
             type="button"
             className={drawingType === type ? "drawing-tool-active" : ""}
             aria-pressed={drawingType === type}
-            disabled={drawingBusy}
+            disabled={drawingBusy || !canDraw}
             onClick={() => setDrawingType(type)}
           >{DRAWING_LABELS[type]}</button>)}</fieldset>
           {drawingType === "text" && <label>내용<input
             value={drawingText}
             maxLength={500}
-            disabled={drawingBusy}
+            disabled={drawingBusy || !canDraw}
             onChange={(event) => setDrawingText(event.target.value)}
             placeholder="맵에 표시할 텍스트"
           /></label>}
           <div className="drawing-style-controls">
-            <label>색상<input aria-label="그리기 색상" type="color" value={drawingColor} disabled={drawingBusy} onChange={(event) => setDrawingColor(event.target.value.toUpperCase())} /></label>
-            <label>두께 {drawingStrokeWidth}<input aria-label="선 두께" type="range" min="1" max="20" value={drawingStrokeWidth} disabled={drawingBusy} onChange={(event) => setDrawingStrokeWidth(Number(event.target.value))} /></label>
+            <label>색상<input aria-label="그리기 색상" type="color" value={drawingColor} disabled={drawingBusy || !canDraw} onChange={(event) => setDrawingColor(event.target.value.toUpperCase())} /></label>
+            <label>두께 {drawingStrokeWidth}<input aria-label="선 두께" type="range" min="1" max="20" value={drawingStrokeWidth} disabled={drawingBusy || !canDraw} onChange={(event) => setDrawingStrokeWidth(Number(event.target.value))} /></label>
           </div>
-          <label>기존 그림<select value={selectedDrawingId} disabled={drawingBusy || !selectedDrawings.length} onChange={(event) => {
+          <label>기존 그림<select value={selectedDrawingId} disabled={drawingBusy || !canDraw || !selectedDrawings.length} onChange={(event) => {
             const drawing = selectedDrawings.find(({ id }) => id === event.target.value);
             setSelectedDrawingId(event.target.value);
             if (drawing) {
@@ -844,8 +885,8 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
             }
           }}><option value="">선택 안 함</option>{selectedDrawings.map((drawing, index) => <option key={drawing.id} value={drawing.id}>그림 {index + 1} · {DRAWING_LABELS[drawing.drawing_type]}</option>)}</select></label>
           <div className="drawing-actions">
-            <button type="button" disabled={drawingBusy || !selectedDrawingId} onClick={() => void updateSelectedDrawing()}>스타일 적용</button>
-            <button className="drawing-delete" type="button" disabled={drawingBusy || !selectedDrawingId} onClick={() => void deleteSelectedDrawing()}>삭제</button>
+            <button type="button" disabled={drawingBusy || !canDraw || !selectedDrawingId} onClick={() => void updateSelectedDrawing()}>스타일 적용</button>
+            <button className="drawing-delete" type="button" disabled={drawingBusy || !canDraw || !selectedDrawingId} onClick={() => void deleteSelectedDrawing()}>삭제</button>
           </div>
           <small>{fogEditing ? "시야 편집을 닫아야 그릴 수 있습니다." : drawingType === "text" ? "내용을 입력하고 맵을 클릭하세요." : "맵을 드래그해 그리세요."}</small>
         </div>
