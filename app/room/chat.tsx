@@ -7,8 +7,6 @@ import type { ChatMessage, ChatMode } from "./chat-message";
 import { supabase } from "@/lib/supabase/client";
 import { useRoomPermissions } from "./room-permissions";
 
-type Role = "master" | "player" | "spectator";
-type Member = { user_id: string; role: Role };
 type Profile = { user_id: string; nickname: string };
 type Character = { id: string; name: string };
 
@@ -17,8 +15,8 @@ const MODE_NAMES: Record<ChatMode, string> = { general: "일반", ic: "IC", ooc:
 const dateTime = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
 
 export default function Chat({ roomId }: { roomId?: string }) {
-  const { canUse, loading: permissionLoading } = useRoomPermissions();
-  const [role, setRole] = useState<Role | null>(null);
+  const { role, currentUserId, members, canUse, loading: permissionLoading } = useRoomPermissions();
+  const [loadedRole, setLoadedRole] = useState<typeof role>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [senderNames, setSenderNames] = useState<Record<string, string>>({});
   const [characters, setCharacters] = useState<Character[]>([]);
@@ -36,13 +34,14 @@ export default function Chat({ roomId }: { roomId?: string }) {
   useEffect(() => {
     let active = true;
 
-    if (!roomId) {
+    if (!roomId || !role || !currentUserId || permissionLoading) {
+      setMessages([]);
+      setCharacters([]);
       setLoading(false);
       return;
     }
 
     async function load() {
-      setRole(null);
       setMessages([]);
       setSenderNames({});
       senderNamesRef.current = {};
@@ -51,28 +50,18 @@ export default function Chat({ roomId }: { roomId?: string }) {
       setError("");
 
       try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!active) return;
-        if (!user) {
-          setError("채팅 권한을 확인할 수 없습니다.");
-          setLoading(false);
-          return;
-        }
-
-        const [memberResult, messageResult, characterResult] = await Promise.all([
-          supabase.from("room_members").select("user_id, role").eq("room_id", roomId).eq("status", "active").order("joined_at"),
+        const [messageResult, characterResult] = await Promise.all([
           supabase.from("chat_messages").select(MESSAGE_FIELDS).eq("room_id", roomId).order("created_at").order("id"),
           supabase.from("character_sheets").select("id, name").eq("room_id", roomId).order("created_at"),
         ]);
 
         if (!active) return;
-        if (memberResult.error || messageResult.error || characterResult.error) {
+        if (messageResult.error || characterResult.error) {
           setError("채팅 기록과 권한을 불러오지 못했습니다.");
           setLoading(false);
           return;
         }
 
-        const members = (memberResult.data ?? []) as Member[];
         const profileResult = members.length
           ? await supabase.from("profiles").select("user_id, nickname").in("user_id", members.map((member) => member.user_id))
           : { data: [], error: null };
@@ -84,7 +73,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
           return;
         }
 
-        setRole(members.find((member) => member.user_id === user.id)?.role ?? null);
+        setLoadedRole(role);
         const names = Object.fromEntries(((profileResult.data ?? []) as Profile[]).map((profile) => [profile.user_id, profile.nickname]));
         senderNamesRef.current = names;
         setSenderNames(names);
@@ -101,7 +90,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
 
     void load();
     return () => { active = false; };
-  }, [roomId]);
+  }, [currentUserId, members, permissionLoading, role, roomId]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -159,8 +148,9 @@ export default function Chat({ roomId }: { roomId?: string }) {
     if (list) list.scrollTop = list.scrollHeight;
   }, [messages]);
 
-  const canSend = canSendChat(role, !permissionLoading && canUse("chat"));
-  const visibleMessages = visibleChatMessages(messages, showSystemMessages);
+  const canSend = !loading && loadedRole === role && canSendChat(role, !permissionLoading && canUse("chat"));
+  const visibleCharacters = loadedRole === role ? characters : [];
+  const visibleMessages = visibleChatMessages(loadedRole === role ? messages : [], showSystemMessages);
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -230,7 +220,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
         </select>
         {mode === "ic" && <select aria-label="발언 캐릭터" value={characterId} disabled={!canSend || loading || sending} onChange={(event) => setCharacterId(event.target.value)}>
           <option value="">캐릭터 선택 안 함</option>
-          {characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}
+          {visibleCharacters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}
         </select>}
         <span>{Array.from(content).length} / {CHAT_MESSAGE_LIMIT}</span>
       </div>

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
+import { ROOM_ACCESS_ENDED_MESSAGE } from "./room/room-access";
 import AuthGuard from "./auth-guard";
 import LogoutButton from "./logout-button";
 
@@ -19,11 +20,13 @@ export default function Home() {
 }
 
 function Lobby() {
+  const [accessEnded, setAccessEnded] = useState(false);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    setAccessEnded(new URLSearchParams(window.location.search).get("roomAccess") === "ended");
     let active = true;
 
     supabase.from("rooms").select("id, name, description, game_system").order("created_at", { ascending: false })
@@ -56,6 +59,7 @@ function Lobby() {
         </div>
         <div className="lobby-actions"><Link className="secondary-button" href="/room/join">초대 코드로 참가</Link><Link className="primary-button" href="/room/create">＋ 새 캠페인</Link></div>
       </section>
+      {accessEnded && <p className="lobby-state form-error" role="alert">{ROOM_ACCESS_ENDED_MESSAGE}</p>}
       <section className="campaign-grid" aria-label="캠페인 목록" aria-busy={loading}>
         {loading && <p className="lobby-state muted">캠페인을 불러오는 중…</p>}
         {!loading && error && <p className="lobby-state form-error" role="alert">{error}</p>}

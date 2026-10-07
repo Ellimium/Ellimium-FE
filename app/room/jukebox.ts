@@ -68,19 +68,13 @@ export type JukeboxAccess = {
   control: (command: JukeboxCommand) => Promise<void>;
   watch: (changed: () => void, status: (status: string) => void) => () => void;
 };
-export function jukeboxAccess(client: SupabaseClient, roomId: string): JukeboxAccess {
+export function jukeboxAccess(client: SupabaseClient, roomId: string, membershipRole: () => JukeboxRole | null): JukeboxAccess {
   return {
     async read() {
-      const { data: { user }, error: authError } = await client.auth.getUser();
-      if (authError) throw new Error("로그인 상태를 확인하지 못했습니다.");
-      if (!user) return { state: null, role: null };
-      const [member, state] = await Promise.all([
-        client.from("room_members").select("role").eq("room_id", roomId).eq("user_id", user.id).eq("status", "active").maybeSingle(),
-        client.from("room_jukebox_states").select(JUKEBOX_FIELDS).eq("room_id", roomId).maybeSingle(),
-      ]);
-      if (member.error || state.error) throw new Error("주크박스 상태를 불러오지 못했습니다.");
-      if (!member.data) return { state: null, role: null };
-      const role = member.data.role;
+      const role = membershipRole();
+      if (!role) return { state: null, role: null };
+      const state = await client.from("room_jukebox_states").select(JUKEBOX_FIELDS).eq("room_id", roomId).maybeSingle();
+      if (state.error) throw new Error("주크박스 상태를 불러오지 못했습니다.");
       if (!["master", "player", "spectator"].includes(role) ||
           (state.data !== null && (!isJukeboxState(state.data) || state.data.room_id !== roomId))) {
         throw new Error("주크박스 상태를 확인하지 못했습니다.");
