@@ -4,13 +4,14 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { buildAttributes, canEditCharacterSheet, formatSheetEntries, parseSheetEntries, sheetRollItems, sheetRollMessage, SHEET_SYSTEMS } from "./character-sheet";
 import type { SheetSystem, SheetRollKind, SheetRollResult } from "./character-sheet";
+import { updateSheetDraft } from "./character-sheet-drafts";
+import type { SheetDrafts, SheetField, SheetTab } from "./character-sheet-drafts";
 import { supabase } from "@/lib/supabase/client";
 
 import { diceErrorMessage } from "./dice-error";
 import { useRoomPermissions } from "./room-permissions";
 
 type Role = "master" | "player" | "spectator";
-type SheetTab = "attributes" | "skills" | "equipment" | "notes";
 type CharacterSheet = {
   id: string;
   owner_id: string;
@@ -36,6 +37,7 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
   const [userId, setUserId] = useState("");
   const [sheets, setSheets] = useState<CharacterSheet[]>([]);
   const [tabs, setTabs] = useState<Record<string, SheetTab>>({});
+  const [drafts, setDrafts] = useState<SheetDrafts>({});
   const [system, setSystem] = useState<SheetSystem>("dnd_5e");
   const [loading, setLoading] = useState(Boolean(roomId));
   const [saving, setSaving] = useState(false);
@@ -224,6 +226,8 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
       const kind = tab === "attributes" ? "attribute" : "skill";
       const rollItems = tab === "attributes" || tab === "skills" ? sheetRollItems(sheet.system, kind, tab === "attributes" ? sheet.attributes : sheet.skills) : [];
       const editable = canEditCharacterSheet(role, userId, sheet.owner_id);
+      const draft = drafts[sheet.id]?.[tab];
+      const editField = (field: SheetField, value: string) => setDrafts((current) => updateSheetDraft(current, sheet.id, tab, field, value));
       return <details key={sheet.id}>
         <summary><strong>{sheet.name}</strong><span>{SHEET_SYSTEMS[sheet.system]?.label ?? sheet.system}</span></summary>
         <div className="character-sheet-tabs" role="tablist" aria-label={`${sheet.name} 시트 항목`}>{Object.entries(SHEET_TABS).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTabs((current) => ({ ...current, [sheet.id]: value as SheetTab }))}>{label}</button>)}</div>
@@ -236,10 +240,10 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
           {!permissionLoading && !canUse("dice") && <p className="muted">주사위 굴림 권한이 없습니다.</p>}
         </div>}
         {editable ? <form key={tab} className="character-sheet-edit" onSubmit={(event) => updateSheet(event, sheet, tab)}>
-          {tab === "attributes" && <><label>능력치<textarea name="attributes" required rows={4} defaultValue={formatSheetEntries(sheet.attributes)} disabled={saving || rolling} /></label><label>자원 (HP·MP 등)<textarea name="resources" rows={3} placeholder={"HP=12\nMP=5"} defaultValue={formatSheetEntries(sheet.resources)} disabled={saving || rolling} /></label></>}
-          {tab === "skills" && <label>스킬 점수<textarea name="skills" rows={5} placeholder={"운동=5\n은신=3"} defaultValue={formatSheetEntries(sheet.skills)} disabled={saving || rolling} /></label>}
-          {tab === "equipment" && <label>장비·아이템<textarea name="equipment" rows={5} placeholder={"장검\n치유 물약"} defaultValue={sheet.equipment.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join("\n")} disabled={saving || rolling} /></label>}
-          {tab === "notes" && <><label>메모<textarea name="notes" rows={3} defaultValue={sheet.notes} disabled={saving || rolling} /></label><label>배경 이야기<textarea name="backstory" rows={5} defaultValue={sheet.backstory} disabled={saving || rolling} /></label></>}
+          {tab === "attributes" && <><label>능력치<textarea name="attributes" required rows={4} value={draft?.attributes ?? formatSheetEntries(sheet.attributes)} onChange={(event) => editField("attributes", event.target.value)} disabled={saving || rolling} /></label><label>자원 (HP·MP 등)<textarea name="resources" rows={3} placeholder={"HP=12\nMP=5"} value={draft?.resources ?? formatSheetEntries(sheet.resources)} onChange={(event) => editField("resources", event.target.value)} disabled={saving || rolling} /></label></>}
+          {tab === "skills" && <label>스킬 점수<textarea name="skills" rows={5} placeholder={"운동=5\n은신=3"} value={draft?.skills ?? formatSheetEntries(sheet.skills)} onChange={(event) => editField("skills", event.target.value)} disabled={saving || rolling} /></label>}
+          {tab === "equipment" && <label>장비·아이템<textarea name="equipment" rows={5} placeholder={"장검\n치유 물약"} value={draft?.equipment ?? sheet.equipment.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join("\n")} onChange={(event) => editField("equipment", event.target.value)} disabled={saving || rolling} /></label>}
+          {tab === "notes" && <><label>메모<textarea name="notes" rows={3} value={draft?.notes ?? sheet.notes} onChange={(event) => editField("notes", event.target.value)} disabled={saving || rolling} /></label><label>배경 이야기<textarea name="backstory" rows={5} value={draft?.backstory ?? sheet.backstory} onChange={(event) => editField("backstory", event.target.value)} disabled={saving || rolling} /></label></>}
           <button className="primary-button" type="submit" disabled={saving || rolling}>{saving ? "저장 중…" : "변경 저장"}</button>
         </form> : <p className="muted character-sheet-readonly">이 시트는 읽기만 가능합니다.</p>}
       </details>;
