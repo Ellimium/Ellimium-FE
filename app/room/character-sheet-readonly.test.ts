@@ -56,7 +56,9 @@ test("비소유자에게 모든 탭의 저장값을 읽기 전용으로 표시�
       assert.match(textarea(html, field).attributes, /readOnly=""/);
     }
     assert.doesNotMatch(html, /변경 저장|변경 취소|미저장 초안|<script>/);
-    for (const button of html.matchAll(/<button[^>]*aria-label="[^"]*검사 굴리기"[^>]*>/g)) assert.match(button[0], /disabled=""/);
+    const rollButtons = [...html.matchAll(/<button[^>]*aria-label="[^"]*검사 굴리기"[^>]*>/g)];
+    assert.equal(rollButtons.length, tab === "attributes" ? 1 : 0);
+    for (const button of rollButtons) assert.match(button[0], /disabled=""/);
   }
 });
 
@@ -68,7 +70,9 @@ test("소유자와 마스터의 입력·저장·굴림 UI를 유지한다", () =
       assert.match(html, /변경 저장/);
       assert.match(html, /변경 취소/);
       if (tab === "notes") assert.equal(textarea(html, "notes").value, "미저장 초안");
-      for (const button of html.matchAll(/<button[^>]*aria-label="[^"]*검사 굴리기"[^>]*>/g)) assert.doesNotMatch(button[0], /disabled=""/);
+      const rollButtons = [...html.matchAll(/<button[^>]*aria-label="[^"]*검사 굴리기"[^>]*>/g)];
+      assert.equal(rollButtons.length, tab === "attributes" ? 1 : 0);
+      for (const button of rollButtons) assert.doesNotMatch(button[0], /disabled=""/);
     }
   }
 });
