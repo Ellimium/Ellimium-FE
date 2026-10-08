@@ -13,13 +13,14 @@ import RoomFeaturePermissions from "./room-feature-permissions";
 import { RoomJukeboxProvider } from "./room-jukebox";
 import RoomMap from "./room-map";
 import { RoomPermissionsProvider } from "./room-permissions";
+import { RoomConnectionProvider } from "./room-connection";
 import RoomTools from "./room-tools";
 
 export default async function Room({ searchParams }: { searchParams: Promise<{ roomId?: string }> }) {
   const { roomId } = await searchParams;
 
   return (
-    <AuthGuard><RoomPermissionsProvider roomId={roomId}><RoomJukeboxProvider key={roomId ?? "no-room"} roomId={roomId}><main className="room-shell">
+    <AuthGuard><RoomConnectionProvider key={roomId ?? "no-room"}><RoomPermissionsProvider roomId={roomId}><RoomJukeboxProvider key={roomId ?? "no-room"} roomId={roomId}><main className="room-shell">
       <header className="room-topbar">
         <Link className="brand" href="/">ELLIMIUM</Link>
         <RoomHeader roomId={roomId} />
@@ -43,6 +44,6 @@ export default async function Room({ searchParams }: { searchParams: Promise<{ r
         { id: "chat", title: "채팅", content: <Chat roomId={roomId} /> },
         { id: "dice", title: "주사위", content: <DiceRoll roomId={roomId} /> },
       ]} />
-    </main></RoomJukeboxProvider></RoomPermissionsProvider></AuthGuard>
+    </main></RoomJukeboxProvider></RoomPermissionsProvider></RoomConnectionProvider></AuthGuard>
   );
 }

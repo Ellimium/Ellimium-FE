@@ -7,6 +7,9 @@ import type { ChatMessage, ChatMode } from "./chat-message";
 import { supabase } from "@/lib/supabase/client";
 import { useRoomPermissions } from "./room-permissions";
 
+import { RECORD_CONNECTION_LABELS, startRecordConnection } from "./record-connection";
+import { useRecordConnection } from "./room-connection";
+
 type Profile = { user_id: string; nickname: string };
 type Character = { id: string; name: string };
 
@@ -25,98 +28,101 @@ export default function Chat({ roomId }: { roomId?: string }) {
   const [content, setContent] = useState("");
   const [loading, setLoading] = useState(Boolean(roomId));
   const [sending, setSending] = useState(false);
-  const [connected, setConnected] = useState(false);
   const [showSystemMessages, setShowSystemMessages] = useState(true);
   const [error, setError] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const senderNamesRef = useRef<Record<string, string>>({});
 
+  const connection = useRecordConnection("chat");
+  const publishConnection = connection.publish;
+
   useEffect(() => {
     let active = true;
+    let version = 0;
+    setLoadedRole(null);
+    setMessages([]);
+    setSenderNames({});
+    senderNamesRef.current = {};
+    setCharacters([]);
 
     if (!roomId || !role || !currentUserId || permissionLoading) {
-      setMessages([]);
-      setCharacters([]);
       setLoading(false);
+      publishConnection(navigator.onLine ? "connecting" : "disconnected", () => {});
       return;
     }
 
+    setLoading(true);
+
+    async function loadMessages(request: number) {
+      const messages: ChatMessage[] = [];
+      // Read every page: the Data API caps each response at 1,000 rows.
+      for (let offset = 0; ; offset += 1000) {
+        const result = await supabase.from("chat_messages").select(MESSAGE_FIELDS).eq("room_id", roomId)
+          .order("created_at").order("id").range(offset, offset + 999);
+        if (!active || request !== version) return { data: [], error: null };
+        if (result.error) return result;
+        const page = (result.data ?? []) as ChatMessage[];
+        messages.push(...page);
+        if (page.length < 1000) return { data: messages, error: null };
+      }
+    }
+
     async function load() {
-      setMessages([]);
-      setSenderNames({});
-      senderNamesRef.current = {};
-      setCharacters([]);
-      setLoading(true);
+      const request = ++version;
       setError("");
 
       try {
         const [messageResult, characterResult] = await Promise.all([
-          supabase.from("chat_messages").select(MESSAGE_FIELDS).eq("room_id", roomId).order("created_at").order("id"),
+          loadMessages(request),
           supabase.from("character_sheets").select("id, name").eq("room_id", roomId).order("created_at"),
         ]);
 
-        if (!active) return;
+        if (!active || request !== version) return;
         if (messageResult.error || characterResult.error) {
           setError("채팅 기록과 권한을 불러오지 못했습니다.");
           setLoading(false);
-          return;
+          return false;
         }
 
-        const profileResult = members.length
-          ? await supabase.from("profiles").select("user_id, nickname").in("user_id", members.map((member) => member.user_id))
+        const senderIds = [...new Set([...members.map((member) => member.user_id),
+          ...(messageResult.data ?? []).flatMap((message: ChatMessage) => message.sender_id ? [message.sender_id] : [])])];
+        const profileResult = senderIds.length
+          ? await supabase.from("profiles").select("user_id, nickname").in("user_id", senderIds)
           : { data: [], error: null };
 
-        if (!active) return;
+        if (!active || request !== version) return;
         if (profileResult.error) {
           setError("채팅 발신자 정보를 불러오지 못했습니다.");
           setLoading(false);
-          return;
+          return false;
         }
 
         setLoadedRole(role);
         const names = Object.fromEntries(((profileResult.data ?? []) as Profile[]).map((profile) => [profile.user_id, profile.nickname]));
-        senderNamesRef.current = names;
-        setSenderNames(names);
+        senderNamesRef.current = { ...senderNamesRef.current, ...names };
+        setSenderNames(senderNamesRef.current);
         setCharacters((characterResult.data ?? []) as Character[]);
         setMessages((current) => mergeChatMessages(current, (messageResult.data ?? []) as ChatMessage[]));
         setLoading(false);
+        return true;
       } catch {
-        if (active) {
+        if (active && request === version) {
           setError("채팅 서버에 연결하지 못했습니다.");
           setLoading(false);
+          return false;
         }
       }
     }
 
-    void load();
-    return () => { active = false; };
-  }, [currentUserId, members, permissionLoading, role, roomId]);
-
-  useEffect(() => {
-    if (!roomId) return;
-
-    function addCharacter(event: Event) {
-      const created = (event as CustomEvent<{ roomId: string; character: Character }>).detail;
-      if (created.roomId === roomId) setCharacters((current) => current.some(({ id }) => id === created.character.id) ? current : [...current, created.character]);
-    }
-
-    window.addEventListener("character-sheet-created", addCharacter);
-    return () => window.removeEventListener("character-sheet-created", addCharacter);
-  }, [roomId]);
-
-  useEffect(() => {
-    if (!roomId) return;
-
-    let active = true;
-    setConnected(false);
-    const channel = supabase
-      .channel(`room:${roomId}:chat`)
+    const createChannel = () => supabase
+      .channel(`room:${roomId}:chat`, { config: { postgres_changes_options: { wait: true } } })
       .on("postgres_changes", {
         event: "INSERT",
         schema: "public",
         table: "chat_messages",
         filter: `room_id=eq.${roomId}`,
       }, ({ new: inserted }) => {
+        if (!active) return;
         const message = inserted as ChatMessage;
         if (!message.id || message.room_id !== roomId) return;
 
@@ -131,16 +137,27 @@ export default function Chat({ roomId }: { roomId?: string }) {
             senderNamesRef.current = { ...senderNamesRef.current, [data.user_id]: data.nickname };
             setSenderNames(senderNamesRef.current);
           });
-      })
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") setConnected(true);
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") setConnected(false);
       });
 
+    const disposeConnection = startRecordConnection(supabase, createChannel, load, publishConnection, { window, online: navigator.onLine });
     return () => {
       active = false;
-      void supabase.removeChannel(channel);
+      version++;
+      disposeConnection();
+      publishConnection("connecting", () => {});
     };
+  }, [currentUserId, members, permissionLoading, publishConnection, role, roomId]);
+
+  useEffect(() => {
+    if (!roomId) return;
+
+    function addCharacter(event: Event) {
+      const created = (event as CustomEvent<{ roomId: string; character: Character }>).detail;
+      if (created.roomId === roomId) setCharacters((current) => current.some(({ id }) => id === created.character.id) ? current : [...current, created.character]);
+    }
+
+    window.addEventListener("character-sheet-created", addCharacter);
+    return () => window.removeEventListener("character-sheet-created", addCharacter);
   }, [roomId]);
 
   useEffect(() => {
@@ -188,8 +205,9 @@ export default function Chat({ roomId }: { roomId?: string }) {
 
   if (!roomId) return null;
 
-  return <section className="chat-panel realtime-chat" aria-label="실시간 채팅" aria-busy={loading || sending}>
-    <div className="panel-tabs"><span className="active">채팅</span><button className={showSystemMessages ? "active" : ""} type="button" aria-pressed={showSystemMessages} onClick={() => setShowSystemMessages((current) => !current)}>{showSystemMessages ? "시스템 숨기기" : "시스템 보기"}</button><span className={connected ? "chat-connected" : ""}>{connected ? "실시간 연결됨" : "연결 중"}</span></div>
+  return <section className="chat-panel realtime-chat" aria-label="실시간 채팅" aria-busy={loading || sending || connection.state === "syncing"}>
+    <div className="panel-tabs"><span className="active">채팅</span><button className={showSystemMessages ? "active" : ""} type="button" aria-pressed={showSystemMessages} onClick={() => setShowSystemMessages((current) => !current)}>{showSystemMessages ? "시스템 숨기기" : "시스템 보기"}</button><span role="status" className={`record-status record-status-${connection.state}`}>{RECORD_CONNECTION_LABELS[connection.state]}</span></div>
+    {(connection.state === "error" || connection.state === "disconnected") && <button className="record-retry" type="button" onClick={connection.retry} aria-label="채팅 연결 및 기록 다시 시도">다시 시도</button>}
     <div className="messages chat-messages" ref={listRef} role="log" aria-live="polite" aria-relevant="additions">
       {loading && <p className="system-message">채팅 기록을 불러오는 중…</p>}
       {!loading && !visibleMessages.length && <p className="system-message">{messages.length ? "시스템 메시지가 숨겨져 있습니다." : "첫 메시지를 보내 대화를 시작하세요."}</p>}

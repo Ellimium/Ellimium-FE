@@ -5,6 +5,9 @@ import { useEffect, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
 
+import { RECORD_CONNECTION_LABELS } from "./record-connection";
+import { useRoomConnection } from "./room-connection";
+
 type RoomInfo = {
   name: string;
   game_system: string;
@@ -12,6 +15,7 @@ type RoomInfo = {
 };
 
 export default function RoomHeader({ roomId }: { roomId?: string }) {
+  const connection = useRoomConnection();
   const [room, setRoom] = useState<RoomInfo | null>(null);
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
@@ -50,7 +54,8 @@ export default function RoomHeader({ roomId }: { roomId?: string }) {
   return <>
     <div className="room-title"><strong>{room?.name ?? "플레이 룸"}</strong><span>{room?.game_system ?? (error || "룸 정보 불러오는 중…")}</span></div>
     <div className="room-actions">
-      <span className="live-dot">연결됨</span>
+      <span role="status" className={`live-dot record-status-${connection.state}`}>{RECORD_CONNECTION_LABELS[connection.state]}</span>
+      {(connection.state === "error" || connection.state === "disconnected") && <button type="button" onClick={connection.retry}>다시 시도</button>}
       <button type="button" disabled={!room} aria-expanded={open} onClick={() => { setOpen(!open); setCopyStatus(""); }}>초대 코드</button>
       <Link href="/">나가기</Link>
       {open && room && <section className="invite-popover" aria-label="룸 초대">
