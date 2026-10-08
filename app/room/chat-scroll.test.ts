@@ -40,6 +40,7 @@ function harness() {
   let stateIndex = 0, refIndex = 0, layoutIndex = 0;
   let layouts: (() => void)[] = [];
   let nodes: React.ReactElement<Props>[] = [];
+  let dirty = false;
   let top = 0;
   const list = {
     scrollHeight: 0, clientHeight: 200,
@@ -54,7 +55,11 @@ function harness() {
         useState: (initial: unknown) => {
           const index = stateIndex++;
           if (!(index in states)) states[index] = initial;
-          setters[index] = (next) => { states[index] = typeof next === "function" ? next(states[index]) : next; };
+          setters[index] = (next) => {
+            const value = typeof next === "function" ? next(states[index]) : next;
+            if (!Object.is(states[index], value)) dirty = true;
+            states[index] = value;
+          };
           return [states[index], setters[index]];
         },
         useRef: (current: unknown) => refs[refIndex++] ?? (refs[refIndex - 1] = { current }),
@@ -74,6 +79,7 @@ function harness() {
     },
   });
   function render() {
+    dirty = false;
     stateIndex = refIndex = layoutIndex = 0;
     layouts = [];
     nodes = elements(exports.default!({ roomId: "room" }));
@@ -82,6 +88,7 @@ function harness() {
     list.scrollHeight = nodes.filter(({ type }) => type === "article").length * 100;
     list.scrollTop = list.scrollTop;
     for (const effect of layouts) effect();
+    if (dirty) render();
   }
   render();
   return {
@@ -91,8 +98,11 @@ function harness() {
     scroll(top: number) {
       list.scrollTop = top;
       nodes.find(({ props }) => props.className === "messages chat-messages")!.props.onScroll!({ currentTarget: list });
+      if (dirty) render();
     },
     toggleSystem() { nodes.find(({ props }) => props["aria-pressed"] !== undefined)!.props.onClick!(); render(); },
+    get notification() { return nodes.find(({ props }) => props.className === "chat-new-messages"); },
+    jumpToLatest() { nodes.find(({ props }) => props.className === "chat-new-messages")!.props.onClick!(); render(); },
   };
 }
 
@@ -147,4 +157,50 @@ test("시스템 메시지를 숨겨 스크롤이 하단으로 제한되면 다�
   assert.equal(h.list.scrollTop, 800);
   h.receive([...history, message(10, true), message(11, true), message(12)]);
   assert.equal(h.list.scrollTop, 900);
+});
+
+test("과거 조회 중 새 메시지를 알리고 버튼으로 하단 이동하면 알림을 해제한다", () => {
+  const h = harness(); h.load(history);
+  assert.equal(h.notification, undefined);
+  h.scroll(200); h.receive([...history, message(10)]);
+  assert.equal(h.list.scrollTop, 200);
+  assert.ok(h.notification);
+  h.jumpToLatest();
+  assert.equal(h.list.scrollTop, 900);
+  assert.equal(h.notification, undefined);
+  h.receive([...history, message(10), message(11)]);
+  assert.equal(h.list.scrollTop, 1000);
+  assert.equal(h.notification, undefined);
+});
+
+test("직접 최신 위치에 도달하면 알림을 해제하고 단순히 근처에 도착하면 유지한다", () => {
+  const h = harness(); h.load(history); h.scroll(200);
+  h.receive([...history, message(10)]);
+  h.scroll(852);
+  assert.ok(h.notification);
+  h.scroll(900);
+  assert.equal(h.notification, undefined);
+});
+
+test("기존 기록·중복 수신·시스템 표시 전환과 숨긴 시스템 수신은 알림을 만들지 않는다", () => {
+  const system = message(10, true);
+  const h = harness(); h.load([...history, system]); h.scroll(200);
+  h.receive([...history, { ...system }]);
+  assert.equal(h.notification, undefined);
+  h.toggleSystem(); h.toggleSystem();
+  assert.equal(h.notification, undefined);
+  h.toggleSystem(); h.receive([...history, system, message(11, true)]);
+  assert.equal(h.notification, undefined);
+  h.toggleSystem();
+  assert.equal(h.notification, undefined);
+});
+
+test("표시 중인 시스템 수신은 알리고 추가 수신과 표시 전환에도 알림을 유지한다", () => {
+  const h = harness(); h.load(history); h.scroll(200);
+  h.receive([...history, message(10, true)]);
+  assert.ok(h.notification);
+  h.receive([...history, message(10, true), message(11)]);
+  assert.ok(h.notification);
+  h.toggleSystem(); h.toggleSystem();
+  assert.ok(h.notification);
 });

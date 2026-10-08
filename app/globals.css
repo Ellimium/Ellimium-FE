@@ -161,6 +161,10 @@ h1,h2,p { margin-top:0; }
 .gm-game-panel { display:flex; flex-direction:column; }
 .gm-panel { flex:none; min-width:0; }
 .gm-panel .realtime-chat { height:360px; }
+.chat-panel.realtime-chat { display:flex; flex-direction:column; }
+.realtime-chat .panel-tabs { min-height:42px; flex:none; }
+.chat-history { position:relative; display:grid; flex:1; min-height:0; }
+.chat-new-messages { position:absolute; left:12px; right:12px; bottom:8px; padding:8px; border:1px solid var(--gold); border-radius:3px; background:#24271f; color:var(--gold-soft); cursor:pointer; font-size:10px; }
 .gm-panel[hidden],.gm-panel>[hidden] { display:none; }
 .gm-panel-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 16px; border-bottom:1px solid var(--line); background:#191c1e; font-size:11px; }
 .gm-panel-heading button,.gm-panel-settings button { border:1px solid #44483f; border-radius:2px; background:#24271f; color:var(--gold-soft); padding:5px 8px; cursor:pointer; font-size:11px; }
