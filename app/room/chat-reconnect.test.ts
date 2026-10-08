@@ -78,6 +78,7 @@ function harness() {
         },
         useRef: (current: unknown) => ({ current }),
         useEffect: (effect: typeof effects[number]) => effects.push(effect),
+        useLayoutEffect: () => {},
       };
       if (name === "./room-connection") return { useRecordConnection: () => ({ state: phase, publish, retry }) };
       if (name === "./room-permissions") return { useRoomPermissions: () => ({
