@@ -41,7 +41,7 @@ function harness() {
     subscribe: (callback: typeof status) => { status = callback; return channel; },
   };
   const client = {
-    channel: (_name: string, config: { config: { private: boolean } }) => { assert.equal(config.config.private, true); return channel; },
+    channel: (_name: string, config: { config: { private: boolean; postgres_changes_options: { wait: boolean } } }) => { assert.equal(config.config.private, true); assert.equal(config.config.postgres_changes_options.wait, true); return channel; },
     removeChannel: async () => {},
     from: (table: string) => {
       const query = {
@@ -165,4 +165,18 @@ test("주사위 패널은 구독 후 동기화 완료·실패·재시도 결과�
   h.read(async () => ({ data: null, error: { message: "failed" } })); h.retry(); await settle(); assert.equal(h.phase, "error");
   h.read(async () => ({ data: [detail("recovered")], error: null })); h.retry(); await settle();
   assert.equal(h.phase, "ready"); assert.equal(h.rolls[0].total, 7); h.dispose();
+});
+
+test("주사위 DB 구독 준비 전 상세·알림을 복구하고 이후 INSERT와 중복 없이 합친다", async () => {
+  const h = harness(); h.read(async () => ({ data: [], error: null }));
+  h.start(); await settle(); assert.equal(h.phase, "connecting");
+  h.read(async (table) => ({ data: table === "dice_rolls" ? [detail("during-join")] : [notification("during-join")], error: null }));
+  assert.equal(h.phase, "connecting"); h.status("SUBSCRIBED");
+  h.insert("dice_rolls", detail("after-ready"));
+  h.insert("dice_roll_notifications", notification("after-ready"));
+  h.insert("dice_roll_notifications", notification("during-join"));
+  await settle();
+  assert.equal(h.phase, "ready");
+  assert.deepEqual(h.rolls.map(({ id }) => id).sort(), ["after-ready", "during-join"]);
+  assert.ok(h.rolls.every((roll) => roll.total === 7)); h.dispose();
 });

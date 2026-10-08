@@ -109,7 +109,7 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
     }
 
     const createChannel = () => supabase
-      .channel(`room:${roomId}:dice`, { config: { private: true } })
+      .channel(`room:${roomId}:dice`, { config: { private: true, postgres_changes_options: { wait: true } } })
       .on("postgres_changes", {
         event: "INSERT",
         schema: "public",

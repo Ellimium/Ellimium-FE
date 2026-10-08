@@ -44,7 +44,10 @@ function harness() {
     subscribe: (callback: typeof status) => { status = callback; return channel; },
   };
   const client = {
-    channel: () => channel,
+    channel: (_name: string, options: { config: { postgres_changes_options: { wait: boolean } } }) => {
+      assert.equal(options.config.postgres_changes_options.wait, true);
+      return channel;
+    },
     removeChannel: async () => { removed = true; },
     from: (table: string) => {
       const query = {
@@ -178,4 +181,17 @@ test("채팅 패널은 구독 후 동기화 완료·실패·재시도 결과를 
   h.read(async () => ({ data: null, error: { message: "failed" } })); h.retry(); await settle(); assert.equal(h.phase, "error");
   h.read(async () => ({ data: [message("recovered")], error: null })); h.retry(); await settle();
   assert.equal(h.phase, "ready"); assert.equal(h.messages[0].id, "recovered"); dispose();
+});
+
+test("채팅 DB 구독 준비 전 기록은 준비 후 조회로 복구하고 이후 INSERT와 중복 없이 합친다", async () => {
+  const h = harness(); h.read(async () => ({ data: [message("before")], error: null }));
+  const dispose = h.start(); await settle(); assert.equal(h.phase, "connecting");
+  // With wait: true, the SDK defers SUBSCRIBED until the DB stream is ready.
+  h.read(async () => ({ data: [message("before"), message("during-join", 1)], error: null }));
+  assert.equal(h.phase, "connecting"); h.status("SUBSCRIBED");
+  h.insert(message("after-ready", 2)); h.insert(message("during-join", 1));
+  await settle();
+  assert.equal(h.phase, "ready");
+  assert.deepEqual(h.messages.map(({ id }) => id), ["before", "during-join", "after-ready"]);
+  dispose();
 });

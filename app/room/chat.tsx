@@ -115,7 +115,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
     }
 
     const createChannel = () => supabase
-      .channel(`room:${roomId}:chat`)
+      .channel(`room:${roomId}:chat`, { config: { postgres_changes_options: { wait: true } } })
       .on("postgres_changes", {
         event: "INSERT",
         schema: "public",
