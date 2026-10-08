@@ -35,6 +35,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
   const [showSystemMessages, setShowSystemMessages] = useState(true);
   const [error, setError] = useState("");
   const [hasNewMessages, setHasNewMessages] = useState(false);
+  const [listVisible, setListVisible] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
   const previousMessageIdsRef = useRef(new Set<string>());
@@ -172,7 +173,15 @@ export default function Chat({ roomId }: { roomId?: string }) {
 
   useLayoutEffect(() => {
     const list = listRef.current;
-    if (!list || loading || loadedRole !== role) return;
+    if (!list) return;
+    const observer = new ResizeObserver(() => setListVisible(list.clientHeight > 0));
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [roomId]);
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list || list.clientHeight === 0 || loading || loadedRole !== role) return;
     const receivedVisibleMessage = visibleChatMessages(messages, showSystemMessages)
       .some((message) => !previousMessageIdsRef.current.has(message.id));
     previousMessageIdsRef.current = new Set(messages.map((message) => message.id));
@@ -180,7 +189,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
     else if (receivedVisibleMessage) setHasNewMessages(true);
     if (list.scrollHeight - list.clientHeight - list.scrollTop <= 1) setHasNewMessages(false);
     followLatestRef.current = isNearBottom(list);
-  }, [messages, loading, showSystemMessages, loadedRole, role]);
+  }, [messages, loading, showSystemMessages, loadedRole, role, listVisible]);
 
   const canSend = !loading && loadedRole === role && canSendChat(role, !permissionLoading && canUse("chat"));
   const visibleCharacters = loadedRole === role ? characters : [];
@@ -227,7 +236,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
     {(connection.state === "error" || connection.state === "disconnected") && <button className="record-retry" type="button" onClick={connection.retry} aria-label="채팅 연결 및 기록 다시 시도">다시 시도</button>}
     <div className="chat-history">
       <div className="messages chat-messages" ref={listRef} onScroll={(event) => {
-        if (loading) return;
+        if (loading || event.currentTarget.clientHeight === 0) return;
         const list = event.currentTarget;
         followLatestRef.current = isNearBottom(list);
         if (list.scrollHeight - list.clientHeight - list.scrollTop <= 1) setHasNewMessages(false);
