@@ -44,7 +44,10 @@ export function mergeChatMessages(current: ChatMessage[], incoming: ChatMessage 
   for (const message of Array.isArray(incoming) ? incoming : [incoming]) byId.set(message.id, message);
 
   return [...byId.values()].sort((left, right) =>
-    Date.parse(left.created_at) - Date.parse(right.created_at) || left.id.localeCompare(right.id));
+    Date.parse(left.created_at) - Date.parse(right.created_at)
+    // PostgreSQL timestamps retain microseconds, which Date.parse truncates.
+    || (left.created_at.match(/\.(\d+)/)?.[1] ?? "").padEnd(6, "0").localeCompare((right.created_at.match(/\.(\d+)/)?.[1] ?? "").padEnd(6, "0"))
+    || left.id.localeCompare(right.id));
 }
 
 export function visibleChatMessages(messages: ChatMessage[], showSystemMessages: boolean) {

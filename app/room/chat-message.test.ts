@@ -71,3 +71,13 @@ test("시스템 메시지 표시 여부로 채팅을 필터링한다", () => {
   assert.deepEqual(visibleChatMessages(messages, true).map(({ id }) => id), ["chat", "system"]);
   assert.deepEqual(visibleChatMessages(messages, false).map(({ id }) => id), ["chat"]);
 });
+
+
+test("같은 밀리초의 PostgreSQL 마이크로초를 보존하고 같은 시각만 ID순으로 정렬한다", () => {
+  const rows = mergeChatMessages([], [
+    message("a", "2026-10-08T00:00:00.000999+00:00"),
+    message("z", "2026-10-08T00:00:00.000001+00:00"),
+    message("b", "2026-10-08T00:00:00.000999+00:00"),
+  ]);
+  assert.deepEqual(rows.map(({ id }) => id), ["z", "a", "b"]);
+});

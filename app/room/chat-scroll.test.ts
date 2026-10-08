@@ -47,6 +47,13 @@ function harness() {
   let hidden = false;
   const list = {
     scrollHeight: 0, clientHeight: 200,
+    getBoundingClientRect: () => ({ top: 0 }),
+    querySelectorAll() {
+      return nodes.filter(({ type }) => type === "article").map((node, index) => ({
+        dataset: { messageId: String(node.key) },
+        getBoundingClientRect: () => ({ top: index * 100 - list.scrollTop, bottom: (index + 1) * 100 - list.scrollTop }),
+      }));
+    },
     get scrollTop() { return hidden ? 0 : top; },
     set scrollTop(value: number) { if (!hidden) top = Math.max(0, Math.min(value, list.scrollHeight - list.clientHeight)); },
   };
@@ -109,10 +116,21 @@ function harness() {
     list,
     load(messages: ChatMessage[]) { setters[0]("player"); setters[1](messages); setters[7](false); render(); },
     receive(messages: ChatMessage[]) { setters[1](messages); render(); },
+    prepend(older: ChatMessage[], messages: ChatMessage[], hidden = false) {
+      const anchor = list.querySelectorAll().find((node) => node.getBoundingClientRect().bottom > 0)!;
+      refs[6].current = { id: anchor.dataset.messageId, top: anchor.getBoundingClientRect().top };
+      refs[5].current = new Set(older.map(({ id }) => id));
+      if (hidden) { this.setHidden(true); }
+      setters[1]([...older, ...messages]); render();
+    },
     scroll(top: number) {
       list.scrollTop = top;
       nodes.find(({ props }) => props.className === "messages chat-messages")!.props.onScroll!({ currentTarget: list });
       if (dirty) render();
+    },
+    recover(messages: ChatMessage[]) {
+      refs[6].current = refs[7].current;
+      setters[1](messages); render();
     },
     toggleSystem() { nodes.find(({ props }) => props["aria-pressed"] !== undefined)!.props.onClick!(); render(); },
     setHidden(value: boolean) {
@@ -271,4 +289,42 @@ test("접혀 있는 동안의 중복 수신과 필터로 숨긴 시스템 수신
   assert.equal(h.notification, undefined);
   h.setHidden(true); h.receive([...history, { ...message(10, true) }]); h.setHidden(false);
   assert.equal(h.notification, undefined);
+});
+
+
+test("이전 기록 추가는 기존 읽던 메시지 위치를 유지하고 새 메시지 알림을 만들지 않는다", () => {
+  const h = harness(); h.load(history); h.scroll(200);
+  const older = [message(-2), message(-1)];
+  h.prepend(older, history);
+  assert.equal(h.list.scrollTop, 400);
+  assert.equal(h.notification, undefined);
+  h.receive([...older, ...history, message(10)]);
+  assert.equal(h.list.scrollTop, 400);
+  assert.ok(h.notification);
+});
+
+test("이전 기록과 새 수신을 함께 반영해도 추가된 과거 높이만큼 이동하고 새 수신은 알린다", () => {
+  const h = harness(); h.load(history); h.scroll(200);
+  h.prepend([message(-2), message(-1)], [...history, message(10), message(11)]);
+  assert.equal(h.list.scrollTop, 400);
+  assert.ok(h.notification);
+});
+
+test("숨긴 시스템 과거 기록은 위치와 알림을 바꾸지 않고 접힌 패널은 펼친 뒤 과거 위치를 복구한다", () => {
+  const h = harness(); h.load(history); h.toggleSystem(); h.scroll(200);
+  h.prepend([message(-1, true)], history);
+  assert.equal(h.list.scrollTop, 200);
+  assert.equal(h.notification, undefined);
+  h.prepend([message(-2)], [message(-1, true), ...history], true);
+  h.setHidden(false);
+  assert.equal(h.list.scrollTop, 300);
+  assert.equal(h.notification, undefined);
+});
+
+
+test("재연결로 읽던 메시지 앞의 누락 기록을 복구해도 그 메시지의 화면 위치를 유지한다", () => {
+  const h = harness(); h.load(history); h.scroll(250);
+  h.recover([history[0], message(0.5), ...history.slice(1)]);
+  assert.equal(h.list.scrollTop, 350);
+  assert.ok(h.notification);
 });

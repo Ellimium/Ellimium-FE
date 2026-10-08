@@ -4,6 +4,8 @@ import { FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { canSendChat, CHAT_MESSAGE_LIMIT, limitChatContent, mergeChatMessages, messageParts, systemMessageDisplay, visibleChatMessages } from "./chat-message";
 import type { ChatMessage, ChatMode } from "./chat-message";
+import { CHAT_HISTORY_PAGE_SIZE, readChatPage } from "./chat-history";
+import type { ChatCursor } from "./chat-history";
 import { supabase } from "@/lib/supabase/client";
 import { useRoomPermissions } from "./room-permissions";
 
@@ -13,12 +15,20 @@ import { useRecordConnection } from "./room-connection";
 type Profile = { user_id: string; nickname: string };
 type Character = { id: string; name: string };
 
-const MESSAGE_FIELDS = "id, room_id, sender_id, character_id, character_name, mode, content, message_type, event_type, event_data, created_at";
 const MODE_NAMES: Record<ChatMode, string> = { general: "일반", ic: "IC", ooc: "OOC" };
 const dateTime = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
 
 function isNearBottom(list: HTMLDivElement) {
   return list.scrollHeight - list.clientHeight - list.scrollTop <= 48;
+}
+
+type ChatAnchor = { id: string; top: number };
+function chatAnchor(list: HTMLDivElement | null): ChatAnchor | null {
+  if (!list || !list.clientHeight) return null;
+  const top = list.getBoundingClientRect().top;
+  const anchor = Array.from(list.querySelectorAll<HTMLElement>("[data-message-id]"))
+    .find((node) => node.getBoundingClientRect().bottom > top);
+  return anchor ? { id: anchor.dataset.messageId!, top: anchor.getBoundingClientRect().top - top } : null;
 }
 
 export default function Chat({ roomId }: { roomId?: string }) {
@@ -41,12 +51,31 @@ export default function Chat({ roomId }: { roomId?: string }) {
   const previousMessageIdsRef = useRef(new Set<string>());
   const senderNamesRef = useRef<Record<string, string>>({});
 
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderError, setOlderError] = useState("");
+  const loadOlderRef = useRef<(() => Promise<void>) | null>(null);
+  const olderMessageIdsRef = useRef(new Set<string>());
+  const prependAnchorRef = useRef<ChatAnchor | null>(null);
+  const viewportAnchorRef = useRef<ChatAnchor | null>(null);
+
   const connection = useRecordConnection("chat");
   const publishConnection = connection.publish;
 
   useEffect(() => {
     let active = true;
     let version = 0;
+    let initialized = false;
+    let oldest: ChatCursor | null = null;
+    let olderBusy = false;
+    const liveMessageIds = new Set<string>();
+    setHasOlder(false);
+    setLoadingOlder(false);
+    setOlderError("");
+    loadOlderRef.current = null;
+    olderMessageIdsRef.current.clear();
+    prependAnchorRef.current = null;
+    viewportAnchorRef.current = null;
     setLoadedRole(null);
     setMessages([]);
     followLatestRef.current = true;
@@ -66,17 +95,56 @@ export default function Chat({ roomId }: { roomId?: string }) {
 
     async function loadMessages(request: number) {
       const messages: ChatMessage[] = [];
-      // Read every page: the Data API caps each response at 1,000 rows.
-      for (let offset = 0; ; offset += 1000) {
-        const result = await supabase.from("chat_messages").select(MESSAGE_FIELDS).eq("room_id", roomId)
-          .order("created_at").order("id").range(offset, offset + 999);
+      const initial = !initialized;
+      const since = oldest;
+      let before: ChatCursor | null = null;
+      for (;;) {
+        const result = await readChatPage(supabase, roomId!, before, since);
         if (!active || request !== version) return { data: [], error: null };
         if (result.error) return result;
-        const page = (result.data ?? []) as ChatMessage[];
-        messages.push(...page);
-        if (page.length < 1000) return { data: messages, error: null };
+        messages.push(...result.data);
+        if (initial || result.data.length < CHAT_HISTORY_PAGE_SIZE) return { data: messages, error: null };
+        before = result.data.at(-1)!;
       }
     }
+
+    async function loadSenderNames(messages: ChatMessage[]) {
+      const senderIds = [...new Set(messages.flatMap((message) =>
+        message.sender_id && !senderNamesRef.current[message.sender_id] ? [message.sender_id] : []))];
+      return senderIds.length
+        ? await supabase.from("profiles").select("user_id, nickname").in("user_id", senderIds)
+        : { data: [], error: null };
+    }
+
+    loadOlderRef.current = async () => {
+      if (!initialized || !oldest || olderBusy) return;
+      olderBusy = true;
+      setLoadingOlder(true);
+      setOlderError("");
+      try {
+        const result = await readChatPage(supabase, roomId!, oldest);
+        if (!active) return;
+        if (result.error) throw result.error;
+        const profiles = await loadSenderNames(result.data);
+        if (!active) return;
+        if (profiles.error) throw profiles.error;
+        const names = Object.fromEntries(((profiles.data ?? []) as Profile[]).map((profile) => [profile.user_id, profile.nickname]));
+        senderNamesRef.current = { ...senderNamesRef.current, ...names };
+        setSenderNames(senderNamesRef.current);
+        prependAnchorRef.current = chatAnchor(listRef.current) ?? viewportAnchorRef.current;
+        for (const message of result.data) {
+          if (!liveMessageIds.has(message.id)) olderMessageIdsRef.current.add(message.id);
+        }
+        oldest = result.data.at(-1) ?? oldest;
+        setHasOlder(result.data.length === CHAT_HISTORY_PAGE_SIZE);
+        setMessages((current) => mergeChatMessages(current, result.data));
+      } catch {
+        if (active) setOlderError("이전 채팅 기록을 불러오지 못했습니다. 다시 시도해 주세요.");
+      } finally {
+        olderBusy = false;
+        if (active) setLoadingOlder(false);
+      }
+    };
 
     async function load() {
       const request = ++version;
@@ -95,11 +163,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
           return false;
         }
 
-        const senderIds = [...new Set((messageResult.data ?? [])
-          .flatMap((message: ChatMessage) => message.sender_id ? [message.sender_id] : []))];
-        const profileResult = senderIds.length
-          ? await supabase.from("profiles").select("user_id, nickname").in("user_id", senderIds)
-          : { data: [], error: null };
+        const profileResult = await loadSenderNames(messageResult.data ?? []);
 
         if (!active || request !== version) return;
         if (profileResult.error) {
@@ -108,11 +172,21 @@ export default function Chat({ roomId }: { roomId?: string }) {
           return false;
         }
 
+        if (!initialized) {
+          oldest = messageResult.data.at(-1) ?? null;
+          setHasOlder(messageResult.data.length === CHAT_HISTORY_PAGE_SIZE);
+          initialized = true;
+        } else if (!oldest && messageResult.data.length) {
+          oldest = messageResult.data.at(-1)!;
+        }
         setLoadedRole(role);
         const names = Object.fromEntries(((profileResult.data ?? []) as Profile[]).map((profile) => [profile.user_id, profile.nickname]));
         senderNamesRef.current = { ...senderNamesRef.current, ...names };
         setSenderNames(senderNamesRef.current);
         setCharacters((characterResult.data ?? []) as Character[]);
+        if (!followLatestRef.current && !prependAnchorRef.current) {
+          prependAnchorRef.current = chatAnchor(listRef.current) ?? viewportAnchorRef.current;
+        }
         setMessages((current) => mergeChatMessages(current, (messageResult.data ?? []) as ChatMessage[]));
         setLoading(false);
         return true;
@@ -137,6 +211,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
         const message = inserted as ChatMessage;
         if (!message.id || message.room_id !== roomId) return;
 
+        liveMessageIds.add(message.id);
         setMessages((current) => mergeChatMessages(current, message));
         if (message.sender_id && !senderNamesRef.current[message.sender_id]) void supabase
           .from("profiles")
@@ -154,6 +229,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
     return () => {
       active = false;
       version++;
+      loadOlderRef.current = null;
       disposeConnection();
       publishConnection("connecting", () => {});
     };
@@ -183,12 +259,19 @@ export default function Chat({ roomId }: { roomId?: string }) {
     const list = listRef.current;
     if (!list || list.clientHeight === 0 || loading || loadedRole !== role) return;
     const receivedVisibleMessage = visibleChatMessages(messages, showSystemMessages)
-      .some((message) => !previousMessageIdsRef.current.has(message.id));
+      .some((message) => !previousMessageIdsRef.current.has(message.id) && !olderMessageIdsRef.current.has(message.id));
     previousMessageIdsRef.current = new Set(messages.map((message) => message.id));
-    if (followLatestRef.current) list.scrollTop = list.scrollHeight;
-    else if (receivedVisibleMessage) setHasNewMessages(true);
+    const pendingAnchor = prependAnchorRef.current;
+    if (pendingAnchor) {
+      const anchor = Array.from(list.querySelectorAll<HTMLElement>("[data-message-id]")).find((node) => node.dataset.messageId === pendingAnchor.id);
+      if (anchor) list.scrollTop += anchor.getBoundingClientRect().top - list.getBoundingClientRect().top - pendingAnchor.top;
+      prependAnchorRef.current = null;
+    } else if (followLatestRef.current) list.scrollTop = list.scrollHeight;
+    if ((!followLatestRef.current || pendingAnchor) && receivedVisibleMessage) setHasNewMessages(true);
+    olderMessageIdsRef.current.clear();
     if (list.scrollHeight - list.clientHeight - list.scrollTop <= 1) setHasNewMessages(false);
     followLatestRef.current = isNearBottom(list);
+    viewportAnchorRef.current = chatAnchor(list);
   }, [messages, loading, showSystemMessages, loadedRole, role, listVisible]);
 
   const canSend = !loading && loadedRole === role && canSendChat(role, !permissionLoading && canUse("chat"));
@@ -231,14 +314,20 @@ export default function Chat({ roomId }: { roomId?: string }) {
 
   if (!roomId) return null;
 
-  return <section className="chat-panel realtime-chat" aria-label="실시간 채팅" aria-busy={loading || sending || connection.state === "syncing"}>
+  return <section className="chat-panel realtime-chat" aria-label="실시간 채팅" aria-busy={loading || loadingOlder || sending || connection.state === "syncing"}>
     <div className="panel-tabs"><span className="active">채팅</span><button className={showSystemMessages ? "active" : ""} type="button" aria-pressed={showSystemMessages} onClick={() => setShowSystemMessages((current) => !current)}>{showSystemMessages ? "시스템 숨기기" : "시스템 보기"}</button><span role="status" className={`record-status record-status-${connection.state}`}>{RECORD_CONNECTION_LABELS[connection.state]}</span></div>
     {(connection.state === "error" || connection.state === "disconnected") && <button className="record-retry" type="button" onClick={connection.retry} aria-label="채팅 연결 및 기록 다시 시도">다시 시도</button>}
+    {!loading && role && loadedRole === role && <div className="chat-history-controls">
+      {hasOlder ? <button type="button" disabled={loadingOlder} onClick={() => { void loadOlderRef.current?.(); }}>{loadingOlder ? "이전 기록을 불러오는 중…" : olderError ? "이전 기록 다시 시도" : "이전 기록 더 불러오기"}</button>
+        : <span>모든 채팅 기록을 불러왔습니다.</span>}
+      {olderError && <p className="form-error" role="alert">{olderError}</p>}
+    </div>}
     <div className="chat-history">
       <div className="messages chat-messages" ref={listRef} onScroll={(event) => {
         if (loading || event.currentTarget.clientHeight === 0) return;
         const list = event.currentTarget;
         followLatestRef.current = isNearBottom(list);
+        viewportAnchorRef.current = chatAnchor(list);
         if (list.scrollHeight - list.clientHeight - list.scrollTop <= 1) setHasNewMessages(false);
       }} role="log" aria-live="polite" aria-relevant="additions">
         {loading && <p className="system-message">채팅 기록을 불러오는 중…</p>}
@@ -247,13 +336,13 @@ export default function Chat({ roomId }: { roomId?: string }) {
           const senderName = message.sender_id ? senderNames[message.sender_id] ?? "알 수 없는 사용자" : "시스템";
           if (message.message_type === "system") {
             const display = systemMessageDisplay(message, senderName);
-            return <article className={`chat-system-message chat-system-message-${message.event_type ?? "unknown"}`} key={message.id}>
+            return <article className={`chat-system-message chat-system-message-${message.event_type ?? "unknown"}`} key={message.id} data-message-id={message.id}>
               <header><strong>{display.label}</strong><time dateTime={message.created_at}>{dateTime.format(new Date(message.created_at))}</time></header>
               <p>{display.text}</p>
             </article>;
           }
 
-          return <article className={`message chat-message chat-message-${message.mode}`} key={message.id}>
+          return <article className={`message chat-message chat-message-${message.mode}`} key={message.id} data-message-id={message.id}>
             <header><strong>{message.character_name ?? senderName}</strong><span>{MODE_NAMES[message.mode]}{message.character_name ? ` · ${senderName}` : ""}</span><time dateTime={message.created_at}>{dateTime.format(new Date(message.created_at))}</time></header>
             <p>{messageParts(message.content).map((part, index) => part.type === "link"
               ? <a key={`${part.value}-${index}`} href={part.value} target="_blank" rel="noreferrer">{part.value}</a>

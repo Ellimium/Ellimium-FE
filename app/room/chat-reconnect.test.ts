@@ -11,7 +11,7 @@ const require = createRequire(import.meta.url);
 const compiled = ts.transpileModule(readFileSync(new URL("chat.tsx", import.meta.url), "utf8"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
 }).outputText;
-const settle = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+const settle = async () => { for (let i = 0; i < 200; i++) await Promise.resolve(); };
 const message = (id: string, second = 0): ChatMessage => ({
   id, room_id: "room", sender_id: "sender", character_id: null, character_name: null,
   mode: "general", content: id, message_type: "chat", event_type: null, event_data: null,
@@ -25,6 +25,7 @@ function deferred() {
 }
 
 // Exercise the component's actual query/subscription callbacks with deferred API responses.
+type PageRequest = { limit: number; before: string | null; since: string | null; sinceId: string | null };
 function harness() {
   let phase = "connecting";
   let retry = () => {};
@@ -43,10 +44,10 @@ function harness() {
   let stateIndex = 0;
   let status!: (value: string) => void;
   let insert!: (payload: { new: ChatMessage }) => void;
-  let read: (offset: number, end: number) => Promise<Result> = async () => ({ data: [], error: null });
+  let read: (request: PageRequest) => Promise<Result> = async () => ({ data: [], error: null });
   let reads = 0;
   let removed = false;
-  const ranges: number[][] = [];
+  const requests: PageRequest[] = [];
   const profileIds: string[][] = [];
   const channel = {
     on: (_event: string, _filter: unknown, callback: typeof insert) => { insert = callback; return channel; },
@@ -60,17 +61,29 @@ function harness() {
     removeChannel: async () => { removed = true; },
     from: (table: string) => {
       let profileId = "sender";
+      const request: PageRequest = { limit: 0, before: null, since: null, sinceId: null };
       const query = {
         select: () => query,
         eq: (field: string, value: string) => { if (field === "user_id") profileId = value; return query; },
         order: () => query,
-        range: (offset: number, end: number) => { reads++; ranges.push([offset, end]); return read(offset, end); },
+        limit: (limit: number) => { request.limit = limit; return query; },
+        or: (filter: string) => {
+          const upper = filter.match(/created_at.lt.([^,]+),and\(created_at.eq.([^,]+),id.lt.([^)]+)\)/);
+          const lower = filter.match(/created_at.gt.([^,]+),and\(created_at.eq.([^,]+),id.gte.([^)]+)\)/);
+          request.before = upper?.[0] ?? null;
+          request.since = lower?.[1] ?? null;
+          request.sinceId = lower?.[3] ?? null;
+          return query;
+        },
         in: (_field: string, ids: string[]) => {
           profileIds.push(ids);
           return Promise.resolve({ data: ids.map((user_id) => ({ user_id, nickname: user_id })), error: null });
         },
         maybeSingle: async () => ({ data: { user_id: profileId, nickname: profileId }, error: null }),
-        then: (resolve: (result: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(resolve),
+        then: (resolve: (result: unknown) => unknown, reject: (error: unknown) => unknown) => {
+          if (table === "chat_messages") { reads++; requests.push(request); return read(request).then(resolve, reject); }
+          return Promise.resolve({ data: [], error: null }).then(resolve, reject);
+        },
       };
       assert.ok(["chat_messages", "character_sheets", "profiles"].includes(table));
       return query;
@@ -128,7 +141,20 @@ function harness() {
     get error() { return states[10] as string; },
     get reads() { return reads; },
     get removed() { return removed; },
-    ranges, profileIds,
+    requests, profileIds,
+    loadOlder: () => (refs[4].current as () => Promise<void>)(),
+    get hasOlder() { return states[13]; },
+    get loadingOlder() { return states[14]; },
+    get olderError() { return states[15]; },
+    dataset(messages: ChatMessage[]) {
+      read = async ({ limit, before, since, sinceId }) => {
+        const cursor = before?.match(/^created_at.lt.(.*),and\(created_at.eq.(.*),id.lt.(.*)\)$/);
+        const data = messages.filter((m) => (!since || m.created_at > since || m.created_at === since && m.id >= sinceId!)
+          && (!cursor || m.created_at < cursor[1] || m.created_at === cursor[1] && m.id < cursor[3]))
+          .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id)).slice(0, limit);
+        return { data, error: null };
+      };
+    },
   };
 }
 
@@ -142,7 +168,7 @@ test("초기 구독과 재구독은 누락 기록을 조회하고 동시 INSERT�
     const pending = deferred();
     h.read(() => pending.promise);
     const before = h.reads;
-    h.status("SUBSCRIBED");
+    h.status("SUBSCRIBED"); await settle();
     assert.equal(h.reads, before + 1);
     assert.ok(h.messages.some(({ id }) => id === "before"));
     h.insert(message("live", 2)); h.insert(message("live", 2));
@@ -164,25 +190,91 @@ test("구독 완료 전 조회가 끝나도 SUBSCRIBED 후 다시 조회해 초�
   dispose();
 });
 
-test("1,000행 제한을 넘는 기록도 마지막 페이지까지 조회한다", async () => {
+test("최신 100건부터 1,000행을 넘는 동일 시각 기록을 커서로 누락·중복 없이 탐색한다", async () => {
   const h = harness();
-  const messages = Array.from({ length: 1002 }, (_, i) => message(String(i).padStart(4, "0"), i));
-  h.read(async (offset, end) => ({ data: messages.slice(offset, end + 1), error: null }));
+  const messages = Array.from({ length: 1102 }, (_, i) => message(String(i).padStart(4, "0")));
+  h.dataset(messages);
   const dispose = h.start(); await settle();
-  assert.equal(h.messages.length, 1002);
-  assert.deepEqual(h.ranges, [[0, 999], [1000, 1999]]);
+  assert.equal(h.messages.length, 100);
+  assert.equal(h.messages[0].id, "1002");
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.requests[0].limit, 100);
+  assert.equal(h.hasOlder, true);
+  h.status("SUBSCRIBED"); await settle();
+  assert.equal(h.messages.length, 100);
+  for (let i = 0; i < 11; i++) await h.loadOlder();
+  assert.equal(h.messages.length, 1102);
+  assert.equal(new Set(h.messages.map(({ id }) => id)).size, 1102);
+  assert.deepEqual(h.messages.map(({ id }) => id), messages.map(({ id }) => id));
+  assert.equal(h.hasOlder, false);
   dispose();
+});
+
+test("재연결은 최신 페이지보다 긴 누락 구간을 복구하고 수신 이벤트로 조회 범위를 좁히지 않는다", async () => {
+  const h = harness();
+  const messages = Array.from({ length: 150 }, (_, i) => message(String(i).padStart(4, "0"), i));
+  h.dataset(messages);
+  const dispose = h.start(); await settle();
+  const missed = Array.from({ length: 1102 }, (_, i) => message(String(i + 150).padStart(4, "0"), i + 150));
+  h.dataset([...messages, ...missed]);
+  h.insert(missed.at(-1)!);
+  h.status("SUBSCRIBED"); await settle();
+  assert.equal(h.messages.length, 1202);
+  assert.equal(h.messages[0].id, "0050");
+  assert.equal(h.messages.at(-1)!.id, "1251");
+  assert.equal(new Set(h.messages.map(({ id }) => id)).size, 1202);
+  assert.equal(h.hasOlder, true);
+  await h.loadOlder();
+  assert.equal(h.messages.length, 1252);
+  dispose();
+});
+
+test("이전 기록 실패·중복 클릭·동시 수신을 처리하고 같은 커서로 재시도한다", async () => {
+  const h = harness();
+  const messages = Array.from({ length: 201 }, (_, i) => message(String(i).padStart(4, "0"), i));
+  h.dataset(messages);
+  const dispose = h.start(); await settle();
+  h.read(async () => ({ data: null, error: { message: "network" } }));
+  await h.loadOlder(); assert.ok(h.olderError); assert.equal(h.messages.length, 100);
+  const failed = h.requests.at(-1)!.before;
+  const pending = deferred(); h.read(() => pending.promise);
+  const loading = h.loadOlder(); await settle(); const reads = h.reads;
+  await h.loadOlder(); assert.equal(h.reads, reads); assert.equal(h.loadingOlder, true);
+  h.insert(message("live", 202));
+  pending.resolve({ data: messages.slice(1, 101).reverse().map((m) => ({ ...m, sender_id: "past-sender" })), error: null });
+  await loading;
+  assert.equal(h.requests.at(-1)!.before, failed);
+  assert.equal(h.olderError, ""); assert.equal(h.loadingOlder, false);
+  assert.equal(h.messages.length, 201); assert.equal(h.senderNames["past-sender"], "past-sender");
+  h.dataset(messages); await h.loadOlder();
+  assert.equal(h.messages.length, 202); assert.equal(h.hasOlder, false);
+  dispose();
+});
+
+test("이전 기록 조회 중 역할·룸·계정 변경과 권한 소실은 늦은 응답을 무시하고 커서를 초기화한다", async () => {
+  for (const [patch, roomId] of [[{ role: "spectator" }, "room"], [{}, "another-room"], [{ currentUserId: "another-user" }, "room"], [{ role: null }, "room"]] as const) {
+    const h = harness(); h.dataset(Array.from({ length: 201 }, (_, i) => message(String(i).padStart(4, "0"), i)));
+    const dispose = h.start(); await settle();
+    const pending = deferred(); h.read(() => pending.promise); const loading = h.loadOlder();
+    h.read(async () => ({ data: [message("new-room")], error: null }));
+    h.updatePermissions(patch, roomId); await settle();
+    pending.resolve({ data: [message("stale-history")], error: null }); await loading;
+    assert.ok(!h.messages.some(({ id }) => id === "stale-history"));
+    assert.equal(h.hasOlder, false); assert.equal(h.loadingOlder, false);
+    if (patch.role !== null) assert.equal(h.requests.at(-1)!.before, null);
+    dispose();
+  }
 });
 
 test("늦은 이전 동기화 응답은 새 조회를 덮어쓰지 않고 종료 후 응답·이벤트를 무시한다", async () => {
   const h = harness(); const old = deferred();
   h.read(() => old.promise);
-  const dispose = h.start();
+  const dispose = h.start(); await settle();
   h.read(async () => ({ data: [message("latest")], error: null }));
   h.status("SUBSCRIBED"); await settle();
   old.resolve({ data: [message("stale")], error: null }); await settle();
   assert.deepEqual(h.messages.map(({ id }) => id), ["latest"]);
-  const pending = deferred(); h.read(() => pending.promise); h.status("SUBSCRIBED");
+  const pending = deferred(); h.read(() => pending.promise); h.status("SUBSCRIBED"); await settle();
   dispose(); const reads = h.reads;
   h.status("SUBSCRIBED"); h.insert(message("after-dispose"));
   pending.resolve({ data: [message("after-dispose")], error: null }); await settle();
@@ -272,7 +364,7 @@ test("본인 역할·계정·룸 변경은 이전 기록을 초기화하고 새 
 
 test("본인 접근 권한이 사라지면 기록을 지우고 이전 조회 응답과 수신을 무시한다", async () => {
   const h = harness(); const pending = deferred(); h.read(() => pending.promise);
-  const dispose = h.start(); const reads = h.reads;
+  const dispose = h.start(); await settle(); const reads = h.reads;
   h.updatePermissions({ role: null });
   h.insert(message("late-event"));
   pending.resolve({ data: [message("late-response")], error: null }); await settle();
@@ -280,5 +372,15 @@ test("본인 접근 권한이 사라지면 기록을 지우고 이전 조회 응
   assert.equal(h.loadedRole, null);
   assert.equal(h.removed, true);
   assert.equal(h.reads, reads);
+  dispose();
+});
+
+
+test("빈 룸에서 시작한 뒤 한 페이지보다 많은 기록이 쌓여도 재연결로 모두 복구한다", async () => {
+  const h = harness(); h.dataset([]);
+  const dispose = h.start(); await settle();
+  h.dataset(Array.from({ length: 201 }, (_, i) => message(String(i).padStart(4, "0"))));
+  h.status("SUBSCRIBED"); await settle();
+  assert.equal(h.messages.length, 201); assert.equal(h.hasOlder, false);
   dispose();
 });
