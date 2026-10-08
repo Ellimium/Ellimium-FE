@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { canSendChat, CHAT_MESSAGE_LIMIT, limitChatContent, mergeChatMessages, messageParts, systemMessageDisplay, visibleChatMessages } from "./chat-message";
 import type { ChatMessage, ChatMode } from "./chat-message";
@@ -17,8 +17,12 @@ const MESSAGE_FIELDS = "id, room_id, sender_id, character_id, character_name, mo
 const MODE_NAMES: Record<ChatMode, string> = { general: "일반", ic: "IC", ooc: "OOC" };
 const dateTime = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
 
+function isNearBottom(list: HTMLDivElement) {
+  return list.scrollHeight - list.clientHeight - list.scrollTop <= 48;
+}
+
 export default function Chat({ roomId }: { roomId?: string }) {
-  const { role, currentUserId, members, canUse, loading: permissionLoading } = useRoomPermissions();
+  const { role, currentUserId, canUse, loading: permissionLoading } = useRoomPermissions();
   const [loadedRole, setLoadedRole] = useState<typeof role>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [senderNames, setSenderNames] = useState<Record<string, string>>({});
@@ -30,7 +34,11 @@ export default function Chat({ roomId }: { roomId?: string }) {
   const [sending, setSending] = useState(false);
   const [showSystemMessages, setShowSystemMessages] = useState(true);
   const [error, setError] = useState("");
+  const [hasNewMessages, setHasNewMessages] = useState(false);
+  const [listVisible, setListVisible] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const followLatestRef = useRef(true);
+  const previousMessageIdsRef = useRef(new Set<string>());
   const senderNamesRef = useRef<Record<string, string>>({});
 
   const connection = useRecordConnection("chat");
@@ -41,6 +49,9 @@ export default function Chat({ roomId }: { roomId?: string }) {
     let version = 0;
     setLoadedRole(null);
     setMessages([]);
+    followLatestRef.current = true;
+    previousMessageIdsRef.current.clear();
+    setHasNewMessages(false);
     setSenderNames({});
     senderNamesRef.current = {};
     setCharacters([]);
@@ -84,8 +95,8 @@ export default function Chat({ roomId }: { roomId?: string }) {
           return false;
         }
 
-        const senderIds = [...new Set([...members.map((member) => member.user_id),
-          ...(messageResult.data ?? []).flatMap((message: ChatMessage) => message.sender_id ? [message.sender_id] : [])])];
+        const senderIds = [...new Set((messageResult.data ?? [])
+          .flatMap((message: ChatMessage) => message.sender_id ? [message.sender_id] : []))];
         const profileResult = senderIds.length
           ? await supabase.from("profiles").select("user_id, nickname").in("user_id", senderIds)
           : { data: [], error: null };
@@ -146,7 +157,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
       disposeConnection();
       publishConnection("connecting", () => {});
     };
-  }, [currentUserId, members, permissionLoading, publishConnection, role, roomId]);
+  }, [currentUserId, permissionLoading, publishConnection, role, roomId]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -160,10 +171,25 @@ export default function Chat({ roomId }: { roomId?: string }) {
     return () => window.removeEventListener("character-sheet-created", addCharacter);
   }, [roomId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const list = listRef.current;
-    if (list) list.scrollTop = list.scrollHeight;
-  }, [messages]);
+    if (!list) return;
+    const observer = new ResizeObserver(() => setListVisible(list.clientHeight > 0));
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [roomId]);
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list || list.clientHeight === 0 || loading || loadedRole !== role) return;
+    const receivedVisibleMessage = visibleChatMessages(messages, showSystemMessages)
+      .some((message) => !previousMessageIdsRef.current.has(message.id));
+    previousMessageIdsRef.current = new Set(messages.map((message) => message.id));
+    if (followLatestRef.current) list.scrollTop = list.scrollHeight;
+    else if (receivedVisibleMessage) setHasNewMessages(true);
+    if (list.scrollHeight - list.clientHeight - list.scrollTop <= 1) setHasNewMessages(false);
+    followLatestRef.current = isNearBottom(list);
+  }, [messages, loading, showSystemMessages, loadedRole, role, listVisible]);
 
   const canSend = !loading && loadedRole === role && canSendChat(role, !permissionLoading && canUse("chat"));
   const visibleCharacters = loadedRole === role ? characters : [];
@@ -208,26 +234,40 @@ export default function Chat({ roomId }: { roomId?: string }) {
   return <section className="chat-panel realtime-chat" aria-label="실시간 채팅" aria-busy={loading || sending || connection.state === "syncing"}>
     <div className="panel-tabs"><span className="active">채팅</span><button className={showSystemMessages ? "active" : ""} type="button" aria-pressed={showSystemMessages} onClick={() => setShowSystemMessages((current) => !current)}>{showSystemMessages ? "시스템 숨기기" : "시스템 보기"}</button><span role="status" className={`record-status record-status-${connection.state}`}>{RECORD_CONNECTION_LABELS[connection.state]}</span></div>
     {(connection.state === "error" || connection.state === "disconnected") && <button className="record-retry" type="button" onClick={connection.retry} aria-label="채팅 연결 및 기록 다시 시도">다시 시도</button>}
-    <div className="messages chat-messages" ref={listRef} role="log" aria-live="polite" aria-relevant="additions">
-      {loading && <p className="system-message">채팅 기록을 불러오는 중…</p>}
-      {!loading && !visibleMessages.length && <p className="system-message">{messages.length ? "시스템 메시지가 숨겨져 있습니다." : "첫 메시지를 보내 대화를 시작하세요."}</p>}
-      {visibleMessages.map((message) => {
-        const senderName = message.sender_id ? senderNames[message.sender_id] ?? "알 수 없는 사용자" : "시스템";
-        if (message.message_type === "system") {
-          const display = systemMessageDisplay(message, senderName);
-          return <article className={`chat-system-message chat-system-message-${message.event_type ?? "unknown"}`} key={message.id}>
-            <header><strong>{display.label}</strong><time dateTime={message.created_at}>{dateTime.format(new Date(message.created_at))}</time></header>
-            <p>{display.text}</p>
-          </article>;
-        }
+    <div className="chat-history">
+      <div className="messages chat-messages" ref={listRef} onScroll={(event) => {
+        if (loading || event.currentTarget.clientHeight === 0) return;
+        const list = event.currentTarget;
+        followLatestRef.current = isNearBottom(list);
+        if (list.scrollHeight - list.clientHeight - list.scrollTop <= 1) setHasNewMessages(false);
+      }} role="log" aria-live="polite" aria-relevant="additions">
+        {loading && <p className="system-message">채팅 기록을 불러오는 중…</p>}
+        {!loading && !visibleMessages.length && <p className="system-message">{messages.length ? "시스템 메시지가 숨겨져 있습니다." : "첫 메시지를 보내 대화를 시작하세요."}</p>}
+        {visibleMessages.map((message) => {
+          const senderName = message.sender_id ? senderNames[message.sender_id] ?? "알 수 없는 사용자" : "시스템";
+          if (message.message_type === "system") {
+            const display = systemMessageDisplay(message, senderName);
+            return <article className={`chat-system-message chat-system-message-${message.event_type ?? "unknown"}`} key={message.id}>
+              <header><strong>{display.label}</strong><time dateTime={message.created_at}>{dateTime.format(new Date(message.created_at))}</time></header>
+              <p>{display.text}</p>
+            </article>;
+          }
 
-        return <article className={`message chat-message chat-message-${message.mode}`} key={message.id}>
-          <header><strong>{message.character_name ?? senderName}</strong><span>{MODE_NAMES[message.mode]}{message.character_name ? ` · ${senderName}` : ""}</span><time dateTime={message.created_at}>{dateTime.format(new Date(message.created_at))}</time></header>
-          <p>{messageParts(message.content).map((part, index) => part.type === "link"
-            ? <a key={`${part.value}-${index}`} href={part.value} target="_blank" rel="noreferrer">{part.value}</a>
-            : <span key={index}>{part.value}</span>)}</p>
-        </article>;
-      })}
+          return <article className={`message chat-message chat-message-${message.mode}`} key={message.id}>
+            <header><strong>{message.character_name ?? senderName}</strong><span>{MODE_NAMES[message.mode]}{message.character_name ? ` · ${senderName}` : ""}</span><time dateTime={message.created_at}>{dateTime.format(new Date(message.created_at))}</time></header>
+            <p>{messageParts(message.content).map((part, index) => part.type === "link"
+              ? <a key={`${part.value}-${index}`} href={part.value} target="_blank" rel="noreferrer">{part.value}</a>
+              : <span key={index}>{part.value}</span>)}</p>
+          </article>;
+        })}
+      </div>
+      {hasNewMessages && <button className="chat-new-messages" type="button" aria-label="새 메시지 확인 · 최신으로 이동" onClick={() => {
+        const list = listRef.current;
+        if (!list) return;
+        list.scrollTop = list.scrollHeight;
+        followLatestRef.current = true;
+        setHasNewMessages(false);
+      }}><span role="status">새 메시지가 있습니다</span> · 최신으로 이동</button>}
     </div>
     {error && <p className="form-error chat-error" role="alert">{error}</p>}
     {!permissionLoading && role && !canSend && <p className="chat-notice">채팅 기록은 읽을 수 있지만 메시지 전송 권한이 없습니다.</p>}
