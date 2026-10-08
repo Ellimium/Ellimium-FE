@@ -22,7 +22,7 @@ function isNearBottom(list: HTMLDivElement) {
 }
 
 export default function Chat({ roomId }: { roomId?: string }) {
-  const { role, currentUserId, members, canUse, loading: permissionLoading } = useRoomPermissions();
+  const { role, currentUserId, canUse, loading: permissionLoading } = useRoomPermissions();
   const [loadedRole, setLoadedRole] = useState<typeof role>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [senderNames, setSenderNames] = useState<Record<string, string>>({});
@@ -94,8 +94,8 @@ export default function Chat({ roomId }: { roomId?: string }) {
           return false;
         }
 
-        const senderIds = [...new Set([...members.map((member) => member.user_id),
-          ...(messageResult.data ?? []).flatMap((message: ChatMessage) => message.sender_id ? [message.sender_id] : [])])];
+        const senderIds = [...new Set((messageResult.data ?? [])
+          .flatMap((message: ChatMessage) => message.sender_id ? [message.sender_id] : []))];
         const profileResult = senderIds.length
           ? await supabase.from("profiles").select("user_id, nickname").in("user_id", senderIds)
           : { data: [], error: null };
@@ -156,7 +156,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
       disposeConnection();
       publishConnection("connecting", () => {});
     };
-  }, [currentUserId, members, permissionLoading, publishConnection, role, roomId]);
+  }, [currentUserId, permissionLoading, publishConnection, role, roomId]);
 
   useEffect(() => {
     if (!roomId) return;

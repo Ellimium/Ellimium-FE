@@ -31,6 +31,15 @@ function harness() {
   const publish = (state: string, again: () => void) => { phase = state; retry = again; };
   const states: unknown[] = [];
   const effects: (() => void | (() => void))[] = [];
+  const effectDependencies: unknown[][] = [];
+  const disposers: (void | (() => void))[] = [];
+  const refs: { current: unknown }[] = [];
+  let pendingEffects: number[] = [];
+  let effectIndex = 0;
+  let refIndex = 0;
+  let permissions = {
+    role: "player" as string | null, currentUserId: "me", members: [{ user_id: "me" }], loading: false, canUse: () => true,
+  };
   let stateIndex = 0;
   let status!: (value: string) => void;
   let insert!: (payload: { new: ChatMessage }) => void;
@@ -50,16 +59,17 @@ function harness() {
     },
     removeChannel: async () => { removed = true; },
     from: (table: string) => {
+      let profileId = "sender";
       const query = {
         select: () => query,
-        eq: () => query,
+        eq: (field: string, value: string) => { if (field === "user_id") profileId = value; return query; },
         order: () => query,
         range: (offset: number, end: number) => { reads++; ranges.push([offset, end]); return read(offset, end); },
         in: (_field: string, ids: string[]) => {
           profileIds.push(ids);
           return Promise.resolve({ data: ids.map((user_id) => ({ user_id, nickname: user_id })), error: null });
         },
-        maybeSingle: async () => ({ data: { user_id: "sender", nickname: "sender" }, error: null }),
+        maybeSingle: async () => ({ data: { user_id: profileId, nickname: profileId }, error: null }),
         then: (resolve: (result: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(resolve),
       };
       assert.ok(["chat_messages", "character_sheets", "profiles"].includes(table));
@@ -73,28 +83,46 @@ function harness() {
       if (name === "react") return { ...React,
         useState: (initial: unknown) => {
           const index = stateIndex++;
-          states[index] = initial;
-          return [initial, (next: unknown) => { states[index] = typeof next === "function" ? next(states[index]) : next; }];
+          if (!(index in states)) states[index] = initial;
+          return [states[index], (next: unknown) => { states[index] = typeof next === "function" ? next(states[index]) : next; }];
         },
-        useRef: (current: unknown) => ({ current }),
-        useEffect: (effect: typeof effects[number]) => effects.push(effect),
+        useRef: (current: unknown) => refs[refIndex++] ?? (refs[refIndex - 1] = { current }),
+        useEffect: (effect: typeof effects[number], deps: unknown[]) => {
+          const index = effectIndex++;
+          effects[index] = effect;
+          if (!effectDependencies[index] || deps.some((value, i) => !Object.is(value, effectDependencies[index][i]))) pendingEffects.push(index);
+          effectDependencies[index] = deps;
+        },
         useLayoutEffect: () => {},
       };
       if (name === "./room-connection") return { useRecordConnection: () => ({ state: phase, publish, retry }) };
-      if (name === "./room-permissions") return { useRoomPermissions: () => ({
-        role: "player", currentUserId: "me", members: [{ user_id: "me" }], loading: false, canUse: () => true,
-      }) };
+      if (name === "./room-permissions") return { useRoomPermissions: () => permissions };
       if (name === "@/lib/supabase/client") return { supabase: client };
       return require(name.startsWith("./") ? `${name}.ts` : name);
     },
   });
-  exports.default!({ roomId: "room" });
+  function render(roomId = "room") {
+    stateIndex = effectIndex = refIndex = 0;
+    pendingEffects = [];
+    exports.default!({ roomId });
+  }
+  function flushEffects() {
+    for (const index of pendingEffects) {
+      disposers[index]?.();
+      disposers[index] = effects[index]();
+    }
+    pendingEffects = [];
+  }
+  render();
   return {
-    start: () => effects[0]() as () => void,
+    start: () => { flushEffects(); return () => { for (const dispose of disposers) dispose?.(); }; },
+    updatePermissions(patch: Partial<typeof permissions>, roomId = "room") { permissions = { ...permissions, ...patch }; render(roomId); flushEffects(); },
     read: (next: typeof read) => { read = next; },
     status: (next: string) => status(next),
     insert: (next: ChatMessage) => insert({ new: next }),
     get messages() { return states[1] as ChatMessage[]; },
+    get senderNames() { return states[2] as Record<string, string>; },
+    get loadedRole() { return states[0]; },
     get phase() { return phase; },
     retry() { retry(); },
     get error() { return states[10] as string; },
@@ -194,5 +222,63 @@ test("채팅 DB 구독 준비 전 기록은 준비 후 조회로 복구하고 �
   await settle();
   assert.equal(h.phase, "ready");
   assert.deepEqual(h.messages.map(({ id }) => id), ["before", "during-join", "after-ready"]);
+  dispose();
+});
+
+test("다른 참가자의 입장·역할 변경·퇴장은 채팅 기록과 구독을 초기화하지 않는다", async () => {
+  const h = harness(); h.read(async () => ({ data: [message("history")], error: null }));
+  const dispose = h.start(); await settle();
+  const history = h.messages;
+  const reads = h.reads;
+  for (const members of [
+    [{ user_id: "me" }, { user_id: "newcomer", role: "player" }],
+    [{ user_id: "me" }, { user_id: "newcomer", role: "spectator" }],
+    [{ user_id: "me" }],
+  ]) {
+    h.updatePermissions({ members });
+    assert.equal(h.loadedRole, "player");
+    assert.deepEqual(h.messages, history);
+    await settle();
+    assert.equal(h.reads, reads);
+    assert.equal(h.removed, false);
+  }
+  h.insert({ ...message("new-member-message", 1), sender_id: "newcomer" }); await settle();
+  assert.equal(h.senderNames.newcomer, "newcomer");
+  assert.deepEqual(h.messages.map(({ id }) => id), ["history", "new-member-message"]);
+  dispose();
+});
+
+test("본인 역할·계정·룸 변경은 이전 기록을 초기화하고 새 권한으로 다시 조회한다", async () => {
+  for (const [patch, roomId, expectedRole] of [
+    [{ role: "spectator" }, "room", "spectator"],
+    [{ currentUserId: "another-user" }, "room", "player"],
+    [{}, "another-room", "player"],
+  ] as const) {
+    const h = harness(); h.read(async () => ({ data: [message("old")], error: null }));
+    const dispose = h.start(); await settle();
+    const reads = h.reads;
+    h.read(async () => ({ data: [message("new")], error: null }));
+    h.updatePermissions(patch, roomId);
+    assert.equal(h.loadedRole, null);
+    assert.equal(h.messages.length, 0);
+    assert.equal(h.removed, true);
+    await settle();
+    assert.ok(h.reads > reads);
+    assert.equal(h.loadedRole, expectedRole);
+    assert.deepEqual(h.messages.map(({ id }) => id), ["new"]);
+    dispose();
+  }
+});
+
+test("본인 접근 권한이 사라지면 기록을 지우고 이전 조회 응답과 수신을 무시한다", async () => {
+  const h = harness(); const pending = deferred(); h.read(() => pending.promise);
+  const dispose = h.start(); const reads = h.reads;
+  h.updatePermissions({ role: null });
+  h.insert(message("late-event"));
+  pending.resolve({ data: [message("late-response")], error: null }); await settle();
+  assert.equal(h.messages.length, 0);
+  assert.equal(h.loadedRole, null);
+  assert.equal(h.removed, true);
+  assert.equal(h.reads, reads);
   dispose();
 });
