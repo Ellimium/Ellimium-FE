@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { ReactNode, useEffect, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
+import { getLoginHrefForPath } from "./login/return-path";
 
 export default function AuthGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -12,20 +13,25 @@ export default function AuthGuard({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true;
 
+    function redirectToLogin() {
+      if (!active) return;
+      setReady(false);
+      router.replace(getLoginHrefForPath(`${window.location.pathname}${window.location.search}`));
+    }
+
     supabase.auth.getUser()
       .then(({ data }) => {
         if (!active) return;
         if (data.user) setReady(true);
-        else router.replace("/login");
+        else redirectToLogin();
       })
       .catch(() => {
-        if (active) router.replace("/login");
+        redirectToLogin();
       });
 
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!session) {
-        setReady(false);
-        router.replace("/login");
+        redirectToLogin();
       }
     });
 
