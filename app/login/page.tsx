@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
+import { getAuthErrorMessage } from "./auth-errors";
 import { getSafeReturnPath } from "./return-path";
 
 export default function Login() {
@@ -31,7 +32,7 @@ export default function Login() {
         : await supabase.auth.signUp({ email, password, options: { data: { nickname } } });
 
       if (result.error) {
-        setError(result.error.message);
+        setError(getAuthErrorMessage(result.error));
       } else if (result.data.session) {
         const returnTo = getSafeReturnPath(new URLSearchParams(window.location.search).get("returnTo"));
         router.replace(returnTo);
@@ -39,8 +40,8 @@ export default function Login() {
       } else {
         setMessage("확인 이메일의 링크를 열어 가입을 완료하세요.");
       }
-    } catch {
-      setError("인증 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.");
+    } catch (error) {
+      setError(getAuthErrorMessage(error));
     } finally {
       setBusy(false);
     }

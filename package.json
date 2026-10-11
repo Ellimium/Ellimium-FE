@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "test:login": "node --experimental-strip-types --test app/login/*.test.ts",
     "test:lobby": "node --experimental-strip-types --test app/lobby.test.ts",
     "test:profile": "node --experimental-strip-types --test app/profile/*.test.ts",
     "test:assets": "node --experimental-strip-types --test app/assets/*.test.ts",
