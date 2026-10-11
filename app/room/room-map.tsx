@@ -101,6 +101,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const draggingRef = useRef(dragging);
   draggingRef.current = dragging;
   const pendingDragEnd = useRef<PendingDragEnd | null>(null);
+  const visibilityVersion = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -124,13 +125,26 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       return;
     }
 
-    async function load() {
+    let loadVersion = 0;
+
+    function load() {
+      const version = ++loadVersion;
+      void loadMaps(version).catch(() => {
+        if (active && version === loadVersion) {
+          setError("룸 맵 서버에 연결하지 못했습니다.");
+          setLoading(false);
+        }
+      });
+    }
+
+    async function loadMaps(version: number) {
+      const loadedVisibilityVersion = visibilityVersion.current;
       setLoading(true);
       setError("");
       if (!currentUserId || !role) { setLoading(false); return; }
       const { data: roomMaps, error: roomMapError } = await supabase.from("room_maps")
         .select("id, asset_id, grid_cell_size, grid_offset_x, grid_offset_y, fog_enabled").eq("room_id", roomId).order("created_at");
-      if (!active) return;
+      if (!active || version !== loadVersion) return;
       if (roomMapError) {
         setError("룸 맵을 불러올 수 없습니다.");
         setLoading(false);
@@ -154,7 +168,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
           : Promise.resolve({ data: [], error: null }),
       ]);
 
-      if (!active) return;
+      if (!active || version !== loadVersion) return;
       if (profileError || tokenAssetError || tokenError || visibilityError) {
         setError("토큰과 시야 정보를 불러올 수 없습니다.");
         setLoading(false);
@@ -170,7 +184,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         ? await supabase.from("assets").select("id, category, storage_path, thumbnail_storage_path, created_at").in("id", assetIds)
         : { data: [], error: null };
 
-      if (!active) return;
+      if (!active || version !== loadVersion) return;
       if (assetError) {
         setError("룸 맵과 토큰 이미지를 불러올 수 없습니다.");
         setLoading(false);
@@ -186,13 +200,18 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         ? await supabase.storage.from("assets").createSignedUrls(imagePaths, 60 * 60)
         : { data: [], error: null };
 
-      if (!active) return;
+      if (!active || version !== loadVersion) return;
       if (signedUrlError) {
         setError("룸 맵과 토큰 이미지를 표시할 수 없습니다.");
         setLoading(false);
         return;
       }
 
+      // A live Fog/visibility change makes this snapshot stale; reload before applying it.
+      if (loadedVisibilityVersion !== visibilityVersion.current) {
+        load();
+        return;
+      }
       const urls = new Map(signedUrls.map(({ path, signedUrl }) => [path, signedUrl]));
       const assetsById = new Map(assetList.map((asset) => [asset.id, asset]));
       const nextMaps = mapList.flatMap((map) => {
@@ -222,12 +241,21 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     }
 
     window.addEventListener("room-map-registered", refresh);
-    void load().catch(() => {
-      if (active) { setError("룸 맵 서버에 연결하지 못했습니다."); setLoading(false); }
-    });
+    const channel = supabase
+      .channel(`room:${roomId}:maps`, { config: { postgres_changes_options: { wait: true } } })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "room_maps", filter: `room_id=eq.${roomId}` }, () => {
+        if (active) void load();
+      })
+      .subscribe((status) => {
+        if (!active) return;
+        if (status === "SUBSCRIBED") void load();
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setError("룸 맵 실시간 채널에 연결할 수 없습니다.");
+      });
+    void load();
     return () => {
       active = false;
       window.removeEventListener("room-map-registered", refresh);
+      void supabase.removeChannel(channel);
     };
   }, [canViewMap, currentUserId, members, permissionLoading, role, roomId]);
 
@@ -351,10 +379,12 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "map_visibility", filter: `map_id=eq.${selectedId}` }, ({ new: next }) => {
         const row = next as VisibilityRow;
         if (!row.id) return;
+        visibilityVersion.current++;
         setVisibilityRows((current) => [...current.filter(({ id }) => id !== row.id), row]);
       })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "room_maps", filter: `id=eq.${selectedId}` }, ({ new: next }) => {
         if (typeof next.fog_enabled !== "boolean") return;
+        visibilityVersion.current++;
         setMaps((current) => current.map((map) => map.id === selectedId ? { ...map, fog_enabled: next.fog_enabled as boolean } : map));
       })
       .subscribe((status) => {
@@ -554,7 +584,10 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       new_fog_enabled: enabled,
     });
     if (fogError) setError("Fog 상태를 변경할 수 없습니다.");
-    else setMaps((current) => current.map((map) => map.id === selected.id ? { ...map, fog_enabled: enabled } : map));
+    else {
+      visibilityVersion.current++;
+      setMaps((current) => current.map((map) => map.id === selected.id ? { ...map, fog_enabled: enabled } : map));
+    }
     setFogBusy(false);
   }
 
@@ -586,7 +619,10 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       .select("id, map_id, room_member_id, scope, inherits_common, revealed_areas")
       .single();
     if (visibilityError || !data) setError("맵 시야 영역을 저장할 수 없습니다.");
-    else setVisibilityRows((current) => [...current.filter(({ id }) => id !== data.id), data as VisibilityRow]);
+    else {
+      visibilityVersion.current++;
+      setVisibilityRows((current) => [...current.filter(({ id }) => id !== data.id), data as VisibilityRow]);
+    }
     setFogBusy(false);
   }
 
@@ -602,7 +638,10 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       .select("id, map_id, room_member_id, scope, inherits_common, revealed_areas")
       .single();
     if (visibilityError || !data) setError("플레이어 시야를 공통 영역으로 되돌릴 수 없습니다.");
-    else setVisibilityRows((current) => [...current.filter(({ id }) => id !== data.id), data as VisibilityRow]);
+    else {
+      visibilityVersion.current++;
+      setVisibilityRows((current) => [...current.filter(({ id }) => id !== data.id), data as VisibilityRow]);
+    }
     setFogBusy(false);
   }
 
