@@ -68,3 +68,14 @@ test("값 없는 비공개 알림은 시트 정보가 있더라도 표시·검�
   const authorized = { ...sheetRoll, visibility: "private" as const };
   assert.match(diceRollDisplay(authorized).summary, /전사.*비공개/);
 });
+
+
+test("동일 시각 ID와 PostgreSQL 마이크로초를 커서 조회와 같은 순서로 정렬한다", () => {
+  const rows = [
+    { ...rolls[0], id: "a", created_at: "2026-10-08T00:00:00.000999+00:00" },
+    { ...rolls[0], id: "z", created_at: "2026-10-08T00:00:00.000001+00:00" },
+    { ...rolls[0], id: "b", created_at: "2026-10-08T00:00:00.000999+00:00" },
+  ];
+  assert.deepEqual(visibleDiceRolls(rows, {}, "", "", "", "asc").map((r) => r.id), ["z", "a", "b"]);
+  assert.deepEqual(visibleDiceRolls(rows, {}, "", "", "", "desc").map((r) => r.id), ["b", "a", "z"]);
+});

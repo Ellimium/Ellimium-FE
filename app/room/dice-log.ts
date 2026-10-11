@@ -44,6 +44,12 @@ export function mergeDiceRolls(current: DiceRollLog[], incoming: DiceRollLog | D
   return [...merged.values()];
 }
 
+export function compareDiceRolls(left: DiceRollLog, right: DiceRollLog) {
+  return Date.parse(left.created_at) - Date.parse(right.created_at)
+    || (left.created_at.match(/\.(\d+)/)?.[1] ?? "").padEnd(6, "0").localeCompare((right.created_at.match(/\.(\d+)/)?.[1] ?? "").padEnd(6, "0"))
+    || left.id.localeCompare(right.id);
+}
+
 export function visibleDiceRolls(rolls: DiceRollLog[], rollerNames: Record<string, string>, rollerId: string, visibility: "" | DiceVisibility, search: string, sort: DiceSort) {
   const query = search.trim().toLocaleLowerCase("ko");
 
@@ -52,5 +58,5 @@ export function visibleDiceRolls(rolls: DiceRollLog[], rollerNames: Record<strin
     .filter((roll) => !visibility || roll.visibility === visibility)
     .filter((roll) => !query || [rollerNames[roll.roller_id], roll.expression, roll.individual_results === undefined ? "" : resultsText(roll.individual_results), roll.total, diceRollDisplay(roll).summary]
       .some((value) => String(value ?? "").toLocaleLowerCase("ko").includes(query)))
-    .sort((left, right) => (Date.parse(left.created_at) - Date.parse(right.created_at)) * (sort === "asc" ? 1 : -1) || left.id.localeCompare(right.id));
+    .sort((left, right) => compareDiceRolls(left, right) * (sort === "asc" ? 1 : -1));
 }

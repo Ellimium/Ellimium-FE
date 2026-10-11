@@ -100,13 +100,20 @@ function MasterPanels({ panels, userId }: { panels: Panel[]; userId: string }) {
 }
 
 export default function GamePanels({ panels, roomId }: { panels: Panel[]; roomId?: string }) {
-  const { role, currentUserId, loading } = useRoomPermissions();
+  const { role, currentUserId, loading, error } = useRoomPermissions();
+  const layoutRef = useRef({ roomId, userId: currentUserId, role });
+  useEffect(() => {
+    if (role && !loading && !error) layoutRef.current = { roomId, userId: currentUserId, role };
+  }, [currentUserId, error, loading, role, roomId]);
   if (loading) {
     return <aside className="game-panel" aria-label="게임 패널" aria-busy="true">
       <p className="muted" role="status">게임 패널 권한을 확인하는 중입니다.</p>
     </aside>;
   }
-  if (role === "master" && currentUserId) {
+  const cachedLayout = layoutRef.current;
+  const keepMasterLayout = !role && Boolean(error) && cachedLayout.roomId === roomId
+    && cachedLayout.userId === currentUserId && cachedLayout.role === "master";
+  if ((role === "master" || keepMasterLayout) && currentUserId) {
     return <MasterPanels key={`${roomId}:${currentUserId}`} panels={panels} userId={currentUserId} />;
   }
   return <aside className="game-panel" aria-label="게임 패널">

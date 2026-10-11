@@ -246,3 +246,15 @@ h1,h2,p { margin-top:0; }
 .record-status-disconnected,.record-status-error { color:#dba39e!important; }
 .live-dot::before { background:currentColor; }
 .record-retry { margin:4px 12px 8px; padding:5px 9px; border:1px solid #66573b; background:#211e18; color:var(--text); font-size:10px; }
+
+.chat-history-controls,.dice-history-controls { flex:none; padding:6px 12px; color:var(--muted); font-size:11px; }
+.chat-history-controls button,.dice-history-controls button { border:1px solid var(--line); border-radius:3px; background:#24271f; color:var(--gold-soft); padding:7px 10px; cursor:pointer; font-size:11px; }
+.chat-history-controls button:disabled,.dice-history-controls button:disabled { opacity:.6; cursor:wait; }
+.chat-history-controls .form-error,.dice-history-controls .form-error { margin:6px 0 0; }
+.chat-messages { overflow-anchor:none; }
+
+.dice-history-controls p { margin:0 0 6px; }
+.dice-panel { display:flex; flex-direction:column; min-height:360px; }
+.dice-panel > .panel-tabs { flex:none; min-height:42px; }
+.gm-panel .dice-panel { height:360px; }
+.dice-list { flex:1; overflow-anchor:none; }
