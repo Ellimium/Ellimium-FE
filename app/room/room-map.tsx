@@ -101,6 +101,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const draggingRef = useRef(dragging);
   draggingRef.current = dragging;
   const pendingDragEnd = useRef<PendingDragEnd | null>(null);
+  const visibilityVersion = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -137,6 +138,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     }
 
     async function loadMaps(version: number) {
+      const loadedVisibilityVersion = visibilityVersion.current;
       setLoading(true);
       setError("");
       if (!currentUserId || !role) { setLoading(false); return; }
@@ -205,6 +207,11 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         return;
       }
 
+      // A live Fog/visibility change makes this snapshot stale; reload before applying it.
+      if (loadedVisibilityVersion !== visibilityVersion.current) {
+        load();
+        return;
+      }
       const urls = new Map(signedUrls.map(({ path, signedUrl }) => [path, signedUrl]));
       const assetsById = new Map(assetList.map((asset) => [asset.id, asset]));
       const nextMaps = mapList.flatMap((map) => {
@@ -372,10 +379,12 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "map_visibility", filter: `map_id=eq.${selectedId}` }, ({ new: next }) => {
         const row = next as VisibilityRow;
         if (!row.id) return;
+        visibilityVersion.current++;
         setVisibilityRows((current) => [...current.filter(({ id }) => id !== row.id), row]);
       })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "room_maps", filter: `id=eq.${selectedId}` }, ({ new: next }) => {
         if (typeof next.fog_enabled !== "boolean") return;
+        visibilityVersion.current++;
         setMaps((current) => current.map((map) => map.id === selectedId ? { ...map, fog_enabled: next.fog_enabled as boolean } : map));
       })
       .subscribe((status) => {
@@ -575,7 +584,10 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       new_fog_enabled: enabled,
     });
     if (fogError) setError("Fog 상태를 변경할 수 없습니다.");
-    else setMaps((current) => current.map((map) => map.id === selected.id ? { ...map, fog_enabled: enabled } : map));
+    else {
+      visibilityVersion.current++;
+      setMaps((current) => current.map((map) => map.id === selected.id ? { ...map, fog_enabled: enabled } : map));
+    }
     setFogBusy(false);
   }
 
@@ -607,7 +619,10 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       .select("id, map_id, room_member_id, scope, inherits_common, revealed_areas")
       .single();
     if (visibilityError || !data) setError("맵 시야 영역을 저장할 수 없습니다.");
-    else setVisibilityRows((current) => [...current.filter(({ id }) => id !== data.id), data as VisibilityRow]);
+    else {
+      visibilityVersion.current++;
+      setVisibilityRows((current) => [...current.filter(({ id }) => id !== data.id), data as VisibilityRow]);
+    }
     setFogBusy(false);
   }
 
@@ -623,7 +638,10 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       .select("id, map_id, room_member_id, scope, inherits_common, revealed_areas")
       .single();
     if (visibilityError || !data) setError("플레이어 시야를 공통 영역으로 되돌릴 수 없습니다.");
-    else setVisibilityRows((current) => [...current.filter(({ id }) => id !== data.id), data as VisibilityRow]);
+    else {
+      visibilityVersion.current++;
+      setVisibilityRows((current) => [...current.filter(({ id }) => id !== data.id), data as VisibilityRow]);
+    }
     setFogBusy(false);
   }
 
