@@ -39,7 +39,7 @@ function harness() {
   let effectIndex = 0;
   let refIndex = 0;
   let permissions = {
-    role: "player" as string | null, currentUserId: "me", members: [{ user_id: "me" }], loading: false, canUse: () => true,
+    error: "", role: "player" as string | null, currentUserId: "me", members: [{ user_id: "me" }], loading: false, canUse: () => true,
   };
   let stateIndex = 0;
   let status!: (value: string) => void;
@@ -383,4 +383,33 @@ test("빈 룸에서 시작한 뒤 한 페이지보다 많은 기록이 쌓여도
   h.status("SUBSCRIBED"); await settle();
   assert.equal(h.messages.length, 201); assert.equal(h.hasOlder, false);
   dispose();
+});
+
+
+test("일시적인 권한 확인 실패는 기록을 숨긴 상태로 커서를 보존하고 같은 역할 재확인 후 누락을 복구한다", async () => {
+  const h = harness();
+  const records = Array.from({ length: 1002 }, (_, i) => message(String(i).padStart(4, "0"), i));
+  h.dataset(records); const dispose = h.start(); await settle(); await h.loadOlder();
+  assert.equal(h.messages.length, 200);
+  h.updatePermissions({ role: null, error: "offline" });
+  assert.equal(h.messages.length, 200); assert.equal(h.hasOlder, true);
+  const missed = Array.from({ length: 205 }, (_, i) => message(String(i + 1002).padStart(4, "0"), i + 1002));
+  h.dataset([...records, ...missed]);
+  h.updatePermissions({ role: "player", error: "" }); await settle();
+  assert.equal(h.messages.length, 405); assert.equal(h.messages[0].id, "0802");
+  assert.equal(h.messages.at(-1)!.id, "1206");
+  h.updatePermissions({ role: "spectator", error: "" }); await settle();
+  assert.equal(h.messages.length, 100); dispose();
+});
+
+
+test("추가 조회 도중 권한 확인이 끊기면 로딩을 해제하고 늦은 페이지를 버린 뒤 다시 조회할 수 있다", async () => {
+  const h = harness(); const rows = Array.from({ length: 201 }, (_, i) => message(String(i).padStart(4, "0"), i));
+  h.dataset(rows); const dispose = h.start(); await settle();
+  const pending = deferred(); h.read(() => pending.promise); const loading = h.loadOlder(); await settle();
+  assert.equal(h.loadingOlder, true);
+  h.updatePermissions({ role: null, error: "offline" }); assert.equal(h.loadingOlder, false);
+  pending.resolve({ data: rows.slice(0, 101), error: null }); await loading; assert.equal(h.messages.length, 100);
+  h.dataset(rows); h.updatePermissions({ role: "player", error: "" }); await settle(); await h.loadOlder();
+  assert.equal(h.messages.length, 200); assert.equal(h.loadingOlder, false); dispose();
 });

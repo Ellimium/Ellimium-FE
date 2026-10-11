@@ -32,7 +32,7 @@ function chatAnchor(list: HTMLDivElement | null): ChatAnchor | null {
 }
 
 export default function Chat({ roomId }: { roomId?: string }) {
-  const { role, currentUserId, canUse, loading: permissionLoading } = useRoomPermissions();
+  const { role, currentUserId, canUse, loading: permissionLoading, error: permissionError, refreshMembership } = useRoomPermissions();
   const [loadedRole, setLoadedRole] = useState<typeof role>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [senderNames, setSenderNames] = useState<Record<string, string>>({});
@@ -59,6 +59,8 @@ export default function Chat({ roomId }: { roomId?: string }) {
   const prependAnchorRef = useRef<ChatAnchor | null>(null);
   const viewportAnchorRef = useRef<ChatAnchor | null>(null);
 
+  const historyRef = useRef<{ roomId: string; userId: string; role: typeof role; initialized: boolean; oldest: ChatCursor | null } | null>(null);
+
   const connection = useRecordConnection("chat");
   const publishConnection = connection.publish;
 
@@ -69,21 +71,33 @@ export default function Chat({ roomId }: { roomId?: string }) {
     let oldest: ChatCursor | null = null;
     let olderBusy = false;
     const liveMessageIds = new Set<string>();
-    setHasOlder(false);
-    setLoadingOlder(false);
-    setOlderError("");
     loadOlderRef.current = null;
-    olderMessageIdsRef.current.clear();
-    prependAnchorRef.current = null;
-    viewportAnchorRef.current = null;
-    setLoadedRole(null);
-    setMessages([]);
-    followLatestRef.current = true;
-    previousMessageIdsRef.current.clear();
-    setHasNewMessages(false);
-    setSenderNames({});
-    senderNamesRef.current = {};
-    setCharacters([]);
+    setLoadingOlder(false);
+    const cached = historyRef.current;
+    const sameIdentity = cached?.roomId === roomId && cached?.userId === currentUserId;
+    if (!role && permissionError && sameIdentity) {
+      setLoading(false);
+      prependAnchorRef.current = viewportAnchorRef.current;
+      publishConnection(navigator.onLine ? "error" : "disconnected", () => { void refreshMembership?.(); });
+      return;
+    }
+    const restoring = sameIdentity && cached?.role === role && !permissionLoading;
+    if (!restoring) {
+      historyRef.current = null;
+      setHasOlder(false);
+      setOlderError("");
+      olderMessageIdsRef.current.clear();
+      prependAnchorRef.current = null;
+      viewportAnchorRef.current = null;
+      setLoadedRole(null);
+      setMessages([]);
+      followLatestRef.current = true;
+      previousMessageIdsRef.current.clear();
+      setHasNewMessages(false);
+      setSenderNames({});
+      senderNamesRef.current = {};
+      setCharacters([]);
+    }
 
     if (!roomId || !role || !currentUserId || permissionLoading) {
       setLoading(false);
@@ -91,7 +105,11 @@ export default function Chat({ roomId }: { roomId?: string }) {
       return;
     }
 
-    setLoading(true);
+    const history = restoring ? cached! : { roomId, userId: currentUserId, role, initialized: false, oldest: null };
+    historyRef.current = history;
+    initialized = history.initialized;
+    oldest = history.oldest;
+    setLoading(!restoring);
 
     async function loadMessages(request: number) {
       const messages: ChatMessage[] = [];
@@ -136,6 +154,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
           if (!liveMessageIds.has(message.id)) olderMessageIdsRef.current.add(message.id);
         }
         oldest = result.data.at(-1) ?? oldest;
+        history.oldest = oldest;
         setHasOlder(result.data.length === CHAT_HISTORY_PAGE_SIZE);
         setMessages((current) => mergeChatMessages(current, result.data));
       } catch {
@@ -179,6 +198,8 @@ export default function Chat({ roomId }: { roomId?: string }) {
         } else if (!oldest && messageResult.data.length) {
           oldest = messageResult.data.at(-1)!;
         }
+        history.initialized = initialized;
+        history.oldest = oldest;
         setLoadedRole(role);
         const names = Object.fromEntries(((profileResult.data ?? []) as Profile[]).map((profile) => [profile.user_id, profile.nickname]));
         senderNamesRef.current = { ...senderNamesRef.current, ...names };
@@ -233,7 +254,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
       disposeConnection();
       publishConnection("connecting", () => {});
     };
-  }, [currentUserId, permissionLoading, publishConnection, role, roomId]);
+  }, [currentUserId, permissionError, permissionLoading, publishConnection, refreshMembership, role, roomId]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -324,7 +345,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
     </div>}
     <div className="chat-history">
       <div className="messages chat-messages" ref={listRef} onScroll={(event) => {
-        if (loading || event.currentTarget.clientHeight === 0) return;
+        if (loading || !role || loadedRole !== role || event.currentTarget.clientHeight === 0) return;
         const list = event.currentTarget;
         followLatestRef.current = isNearBottom(list);
         viewportAnchorRef.current = chatAnchor(list);

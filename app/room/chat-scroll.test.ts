@@ -45,6 +45,7 @@ function harness() {
   let dirty = false;
   let top = 0;
   let hidden = false;
+  let role: string | null = "player";
   const list = {
     scrollHeight: 0, clientHeight: 200,
     getBoundingClientRect: () => ({ top: 0 }),
@@ -87,7 +88,7 @@ function harness() {
         },
       };
       if (name === "./room-permissions") return { useRoomPermissions: () => ({
-        role: "player", currentUserId: "me", members: [], loading: false, canUse: () => true,
+        role, currentUserId: "me", members: [], loading: false, canUse: () => true,
       }) };
       if (name === "./room-connection") return { useRecordConnection: () => ({ state: "ready", publish: () => {} }) };
       if (name === "@/lib/supabase/client") return { supabase: {} };
@@ -138,6 +139,12 @@ function harness() {
       nodes.find(({ props }) => props.className === "messages chat-messages")!.props.onScroll!({ currentTarget: list });
       if (dirty) render();
     },
+    permissionFailure() {
+      refs[6].current = refs[7].current;
+      role = null; render();
+      nodes.find(({ props }) => props.className === "messages chat-messages")!.props.onScroll!({ currentTarget: list });
+    },
+    restorePermission() { role = "player"; render(); },
     dispose() { for (const dispose of layoutDisposers) dispose?.(); },
     get observerCount() { return observers.size; },
     get notification() { return nodes.find(({ props }) => props.className === "chat-new-messages"); },
@@ -327,4 +334,12 @@ test("재연결로 읽던 메시지 앞의 누락 기록을 복구해도 그 메
   h.recover([history[0], message(0.5), ...history.slice(1)]);
   assert.equal(h.list.scrollTop, 350);
   assert.ok(h.notification);
+});
+
+
+test("권한 미확인으로 기록이 숨겨져 발생한 scroll 이벤트가 복구할 위치를 덮어쓰지 않는다", () => {
+  const h = harness(); h.load(history); h.scroll(250);
+  h.permissionFailure(); assert.equal(h.list.scrollTop, 0);
+  h.restorePermission(); assert.equal(h.list.scrollTop, 250);
+  h.receive([...history, message(10)]); assert.equal(h.list.scrollTop, 250); assert.ok(h.notification);
 });
