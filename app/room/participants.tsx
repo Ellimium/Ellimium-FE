@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
 import { useRoomPermissions } from "./room-permissions";
@@ -18,6 +18,16 @@ export default function Participants({ roomId }: { roomId?: string }) {
   const [loading, setLoading] = useState(Boolean(roomId));
   const [error, setError] = useState("");
   const [pendingUserId, setPendingUserId] = useState("");
+  const actionPending = useRef(false);
+  const removeButton = useRef<HTMLButtonElement | null>(null);
+  const section = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (pendingUserId || !removeButton.current) return;
+    const target = removeButton.current.isConnected ? removeButton.current : section.current;
+    target?.focus();
+    removeButton.current = null;
+  }, [pendingUserId]);
 
   useEffect(() => {
     let active = true;
@@ -87,8 +97,9 @@ export default function Participants({ roomId }: { roomId?: string }) {
   const isMaster = role === "master" && !membershipLoading && !checking && !membershipError;
 
   async function changeRole(userId: string, role: Member["role"]) {
-    if (!roomId || !isMaster || pendingUserId) return;
+    if (!roomId || !isMaster || pendingUserId || actionPending.current) return;
 
+    actionPending.current = true;
     setPendingUserId(userId);
     setError("");
     try {
@@ -102,31 +113,39 @@ export default function Participants({ roomId }: { roomId?: string }) {
     } catch {
       setError("참가자 관리 서버에 연결하지 못했습니다.");
     } finally {
+      actionPending.current = false;
       setPendingUserId("");
     }
   }
 
-  async function forceRemove(userId: string) {
-    if (!roomId || !isMaster || pendingUserId) return;
+  async function forceRemove(participant: Participant, button: HTMLButtonElement) {
+    if (!roomId || !isMaster || participant.user_id === currentUserId || pendingUserId || actionPending.current) return;
 
-    setPendingUserId(userId);
+    const confirmed = window.confirm(`“${participant.nickname}” 님을 룸에서 강제 퇴장시키겠습니까?`);
+    button.focus();
+    if (!confirmed) return;
+
+    actionPending.current = true;
+    removeButton.current = button;
+    setPendingUserId(participant.user_id);
     setError("");
     try {
       const { error: removeError } = await supabase.rpc("force_remove_room_member", {
         target_room_id: roomId,
-        target_user_id: userId,
+        target_user_id: participant.user_id,
       });
-      if (removeError) setError(removeError.message);
+      if (removeError) setError(`${participant.nickname} 님 강제 퇴장 실패: ${removeError.message}`);
       else await refreshMembership();
     } catch {
-      setError("참가자 관리 서버에 연결하지 못했습니다.");
+      setError(`${participant.nickname} 님 강제 퇴장 실패: 참가자 관리 서버에 연결하지 못했습니다.`);
     } finally {
+      actionPending.current = false;
       setPendingUserId("");
     }
   }
 
   return (
-    <section className="participants" aria-label="참가자 목록">
+    <section ref={section} tabIndex={-1} className="participants" aria-label="참가자 목록">
       <div className="panel-heading"><div><p className="eyebrow">PARTY</p><h2>참가자</h2></div><span>{loading || membershipLoading ? "불러오는 중" : `${participants.length}명`}</span></div>
       {!roomId && <p className="system-message">룸을 선택하면 참가자를 표시합니다.</p>}
       {membershipError && <p className="form-error" role="alert">{membershipError}</p>}
@@ -140,7 +159,7 @@ export default function Participants({ roomId }: { roomId?: string }) {
               <select value={participant.role} disabled={Boolean(pendingUserId)} aria-label={`${participant.nickname} 역할`} onChange={(event) => { void changeRole(participant.user_id, event.target.value as Member["role"]); }}>
                 {Object.entries(roleName).map(([role, name]) => <option key={role} value={role}>{name}</option>)}
               </select>
-              <button type="button" disabled={Boolean(pendingUserId)} aria-label={`${participant.nickname} 강제 퇴장`} onClick={() => { void forceRemove(participant.user_id); }}>퇴장</button>
+              <button type="button" disabled={Boolean(pendingUserId)} aria-label={`${participant.nickname} 강제 퇴장`} onClick={(event) => { void forceRemove(participant, event.currentTarget); }}>퇴장</button>
             </div>}
           </li>
         ))}
