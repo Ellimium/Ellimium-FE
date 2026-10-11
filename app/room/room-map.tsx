@@ -124,13 +124,25 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       return;
     }
 
-    async function load() {
+    let loadVersion = 0;
+
+    function load() {
+      const version = ++loadVersion;
+      void loadMaps(version).catch(() => {
+        if (active && version === loadVersion) {
+          setError("룸 맵 서버에 연결하지 못했습니다.");
+          setLoading(false);
+        }
+      });
+    }
+
+    async function loadMaps(version: number) {
       setLoading(true);
       setError("");
       if (!currentUserId || !role) { setLoading(false); return; }
       const { data: roomMaps, error: roomMapError } = await supabase.from("room_maps")
         .select("id, asset_id, grid_cell_size, grid_offset_x, grid_offset_y, fog_enabled").eq("room_id", roomId).order("created_at");
-      if (!active) return;
+      if (!active || version !== loadVersion) return;
       if (roomMapError) {
         setError("룸 맵을 불러올 수 없습니다.");
         setLoading(false);
@@ -154,7 +166,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
           : Promise.resolve({ data: [], error: null }),
       ]);
 
-      if (!active) return;
+      if (!active || version !== loadVersion) return;
       if (profileError || tokenAssetError || tokenError || visibilityError) {
         setError("토큰과 시야 정보를 불러올 수 없습니다.");
         setLoading(false);
@@ -170,7 +182,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         ? await supabase.from("assets").select("id, category, storage_path, thumbnail_storage_path, created_at").in("id", assetIds)
         : { data: [], error: null };
 
-      if (!active) return;
+      if (!active || version !== loadVersion) return;
       if (assetError) {
         setError("룸 맵과 토큰 이미지를 불러올 수 없습니다.");
         setLoading(false);
@@ -186,7 +198,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         ? await supabase.storage.from("assets").createSignedUrls(imagePaths, 60 * 60)
         : { data: [], error: null };
 
-      if (!active) return;
+      if (!active || version !== loadVersion) return;
       if (signedUrlError) {
         setError("룸 맵과 토큰 이미지를 표시할 수 없습니다.");
         setLoading(false);
@@ -222,12 +234,21 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     }
 
     window.addEventListener("room-map-registered", refresh);
-    void load().catch(() => {
-      if (active) { setError("룸 맵 서버에 연결하지 못했습니다."); setLoading(false); }
-    });
+    const channel = supabase
+      .channel(`room:${roomId}:maps`, { config: { postgres_changes_options: { wait: true } } })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "room_maps", filter: `room_id=eq.${roomId}` }, () => {
+        if (active) void load();
+      })
+      .subscribe((status) => {
+        if (!active) return;
+        if (status === "SUBSCRIBED") void load();
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setError("룸 맵 실시간 채널에 연결할 수 없습니다.");
+      });
+    void load();
     return () => {
       active = false;
       window.removeEventListener("room-map-registered", refresh);
+      void supabase.removeChannel(channel);
     };
   }, [canViewMap, currentUserId, members, permissionLoading, role, roomId]);
 
