@@ -1,6 +1,6 @@
 # FE #77 비밀번호 복구 검증
 
-2026-10-12, [FE #77](https://github.com/Ellimium/Ellimium-FE/issues/77)의 로컬 구현과 검증 결과를 기록한다. 로컬 복구 흐름은 검증했으며, `ellimium-test`와 `ellimium`의 Auth redirect 설정은 CLI 조회 실패로 확인하지 못했다. 원격 환경의 완료 조건은 아직 충족하지 않았다.
+2026-10-12, [FE #77](https://github.com/Ellimium/Ellimium-FE/issues/77)의 로컬 구현과 검증 결과를 기록한다. 로컬 복구 흐름과 `ellimium-test`의 Auth redirect 설정은 확인했다. `ellimium`의 설정은 CLI 조회 실패로 확인하지 못했으므로 환경별 설정 확인의 완료 조건은 아직 충족하지 않았다.
 
 ## 구현과 검증 기준
 
@@ -21,7 +21,7 @@ BE에 고정된 Supabase CLI `2.118.0`을 사용했다. 원격 조회는 아래�
 | 환경 | project ref | 확인 결과 |
 |---|---|---|
 | local | 로컬 프로젝트 `Ellimium-BE` | 실행 중인 Auth 컨테이너에서 Site URL과 허용 목록 확인 완료 |
-| ellimium-test | `rxfjkuixoezdrstoljcb` | CLI 인증 후 `config pull --dry-run` 재조회도 HTTP 500. 설정 값 미확인 |
+| ellimium-test | `rxfjkuixoezdrstoljcb` | 초기 HTTP 500 이후 `ACTIVE_HEALTHY` 상태에서 CLI dry-run 조회 성공. Site URL `http://localhost:3000`, 추가 redirect 허용 목록 `[]` |
 | ellimium | `qvqjdchhuqjpdevdrlqv` | CLI 인증 후 `config pull --dry-run` 재조회도 HTTP 500. 설정 값 미확인 |
 
 로컬 API는 `http://127.0.0.1:54321`, Mailpit은 `http://127.0.0.1:54324`다. `npx supabase status -o json`의 출력에서 공개 주소만 추출해 실행 상태를 확인했다. 실행 중인 Auth의 URL 관련 환경 변수도 해당 필드만 추출해 확인했다.
@@ -46,9 +46,13 @@ npx supabase config pull --project-ref rxfjkuixoezdrstoljcb --dry-run
 npx supabase config pull --project-ref qvqjdchhuqjpdevdrlqv --dry-run
 ```
 
-두 명령 모두 `ConfigPullReadStatusError`, HTTP 500, `internal_server_error`를 반환했다. 앞선 대체 조회인 `npx supabase config diff --project-ref rxfjkuixoezdrstoljcb`도 `ConfigDiffReadStatusError`와 HTTP 500을 반환했다. 프로젝트 목록에서 두 환경의 상태는 `INACTIVE`로 확인했다. 이 상태와 설정 조회 오류의 인과관계는 확인하지 못했다.
+초기에는 두 명령 모두 `ConfigPullReadStatusError`, HTTP 500, `internal_server_error`를 반환했다. 앞선 대체 조회인 `npx supabase config diff --project-ref rxfjkuixoezdrstoljcb`도 `ConfigDiffReadStatusError`와 HTTP 500을 반환했다. 당시 프로젝트 목록에서 두 환경의 상태는 `INACTIVE`였다.
 
-원격 Site URL·redirect 허용 목록·메일 설정은 추정해서 기록하지 않았다. 조회가 가능해지면 각 FE 배포 origin의 `/login/reset-password`가 허용되는지 확인하고, 변경이 필요한 경우 별도 BE Issue와 루트 TODO로 분리한다.
+같은 날 추가 확인에서는 `ellimium-test`가 `ACTIVE_HEALTHY`였으며 `config pull --dry-run`이 성공했다. 원격 `additional_redirect_urls`는 빈 배열이었다. Site URL은 비교 대상과 같으면 diff에서 생략되므로, 저장소 설정을 변경하지 않고 `/tmp`의 비교용 설정에 임시 Site URL을 지정한 뒤 `--workdir`와 `--dry-run`으로 조회했다. 응답의 원격 Site URL이 `http://localhost:3000`임을 명시적으로 확인했다. 응답의 `written`은 false였고 원격 설정은 변경하지 않았다.
+
+사용자는 원격 테스트의 FE 복귀 주소로 `http://localhost:3000`을 지정했다. [Supabase Auth의 redirect 검증 로직](https://github.com/supabase/auth/blob/master/internal/utilities/request.go)은 Site URL과 같은 origin의 경로를 허용한다. 이를 현재 설정과 대조하면 `http://localhost:3000/login/reset-password`를 허용할 수 있으므로, 이 목적의 추가 BE 설정 변경은 필요하지 않다고 판단했다. 이는 설정과 공식 소스를 대조한 판단이며 원격 메일 링크를 실제로 연 검증은 아니다. 메일 설정 전체도 조회하지 않았다.
+
+`ellimium`은 여전히 `INACTIVE`였고 CLI dry-run 재조회가 HTTP 500을 반환했다. 활성화 상태와 조회 성공 여부가 함께 달라졌지만, 서버 내부 오류의 원인은 확인하지 못했다. 프로덕션 Site URL과 허용 목록은 아직 미확인이다. 조회가 가능해지면 실제 FE 복귀 origin과 대조하고, 변경이 필요한 경우 별도 BE Issue와 루트 TODO로 분리한다.
 
 ## 자동 회귀 검증
 
@@ -98,6 +102,6 @@ npx supabase config pull --project-ref qvqjdchhuqjpdevdrlqv --dry-run
 
 이번 전체 흐름 검증에서 만든 임시 계정은 삭제했고, 복구 토큰이 포함된 임시 파일과 원격 설정 응답 파일은 제거했다. 검증용 FE 서버와 agent-browser 세션은 종료했다. 로컬 Supabase는 실행 상태로 유지했다. 키·비밀번호·복구 토큰은 이 문서와 커밋에 포함하지 않았다.
 
-원격 Auth URL 설정과 원격 전체 복구 흐름은 미검증이다. Safari·Firefox와 스크린 리더 음성 출력도 검증하지 않았다. 새 비밀번호 설정 화면은 복구 세션을 메모리에만 보관하므로 URL 해시 제거 후 새로고침하면 메일 재요청 안내로 돌아간다.
+프로덕션 Auth URL 설정과 원격 전체 복구 흐름은 미검증이다. Safari·Firefox와 스크린 리더 음성 출력도 검증하지 않았다. 새 비밀번호 설정 화면은 복구 세션을 메모리에만 보관하므로 URL 해시 제거 후 새로고침하면 메일 재요청 안내로 돌아간다.
 
 관련 API와 URL 설정 기준은 [Supabase 복구 메일 API](https://supabase.com/docs/reference/javascript/auth-resetpasswordforemail), [사용자 정보 변경 API](https://supabase.com/docs/reference/javascript/auth-updateuser), [Auth redirect URL 설정](https://supabase.com/docs/guides/auth/redirect-urls)을 확인했다.
