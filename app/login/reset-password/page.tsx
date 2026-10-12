@@ -1,6 +1,6 @@
 "use client";
 
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { AuthClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 
@@ -18,10 +18,17 @@ export default function ResetPassword() {
   const [status, setStatus] = useState<"checking" | "ready" | "invalid" | "failed" | "done">("checking");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const client = useRef<SupabaseClient | null>(null);
+  const client = useRef<{ auth: InstanceType<typeof AuthClient>; pending: Promise<unknown> } | null>(null);
   const tokens = useRef<ReturnType<typeof getRecoveryTokens>>(null);
   const submitting = useRef(false);
   const generation = useRef(0);
+
+  function disposeClient() {
+    const previous = client.current;
+    client.current = null;
+    // Initialization can register listeners late; dispose after all auth work finishes.
+    if (previous) void previous.pending.then(() => previous.auth.dispose());
+  }
 
   async function checkSession(isActive = () => true) {
     const currentGeneration = generation.current;
@@ -34,7 +41,10 @@ export default function ResetPassword() {
       return;
     }
     try {
-      const { data, error } = await client.current.auth.setSession(tokens.current);
+      const recovery = client.current;
+      const request = recovery.auth.setSession(tokens.current);
+      recovery.pending = Promise.allSettled([recovery.pending, request]);
+      const { data, error } = await request;
       if (!isCurrent()) return;
       if (error || !data.session) {
         setStatus(error && !isInvalidSession(error) ? "failed" : "invalid");
@@ -52,21 +62,29 @@ export default function ResetPassword() {
   useEffect(() => {
     let active = true;
     function initialize(fromHashChange = false) {
+      disposeClient();
       // Keep recovery credentials in memory, separate from any existing login session.
       tokens.current = fromHashChange ? getRecoveryTokens(window.location.hash) : tokens.current ?? getRecoveryTokens(window.location.hash);
       window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
-      client.current = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        { auth: { persistSession: false, detectSessionInUrl: false, autoRefreshToken: false } },
-      );
+      const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+      const auth = new AuthClient({
+        url: `${process.env.NEXT_PUBLIC_SUPABASE_URL!.replace(/\/$/, "")}/auth/v1`,
+        headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+        persistSession: false, detectSessionInUrl: false, autoRefreshToken: false,
+      });
+      client.current = { auth, pending: Promise.allSettled([auth.getSession()]) };
       generation.current++;
       void checkSession(() => active);
     }
     const handleHashChange = () => initialize(true);
     initialize();
     window.addEventListener("hashchange", handleHashChange);
-    return () => { active = false; window.removeEventListener("hashchange", handleHashChange); };
+    return () => {
+      active = false;
+      generation.current++;
+      window.removeEventListener("hashchange", handleHashChange);
+      disposeClient();
+    };
   }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -84,7 +102,10 @@ export default function ResetPassword() {
     setError("");
     const currentGeneration = generation.current;
     try {
-      const { error } = await client.current.auth.updateUser({ password });
+      const recovery = client.current;
+      const request = recovery.auth.updateUser({ password });
+      recovery.pending = Promise.allSettled([recovery.pending, request]);
+      const { error } = await request;
       if (generation.current !== currentGeneration) return;
       if (error) {
         if (isInvalidSession(error) && error.code !== "same_password") {
@@ -96,7 +117,7 @@ export default function ResetPassword() {
       } else {
         formElement.reset();
         tokens.current = null;
-        client.current = null;
+        disposeClient();
         setStatus("done");
       }
     } catch (error) {

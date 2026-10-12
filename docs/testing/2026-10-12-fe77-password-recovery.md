@@ -105,3 +105,24 @@ npx supabase config pull --project-ref qvqjdchhuqjpdevdrlqv --dry-run
 프로덕션 Auth URL 설정과 원격 전체 복구 흐름은 미검증이다. Safari·Firefox와 스크린 리더 음성 출력도 검증하지 않았다. 새 비밀번호 설정 화면은 복구 세션을 메모리에만 보관하므로 URL 해시 제거 후 새로고침하면 메일 재요청 안내로 돌아간다.
 
 관련 API와 URL 설정 기준은 [Supabase 복구 메일 API](https://supabase.com/docs/reference/javascript/auth-resetpasswordforemail), [사용자 정보 변경 API](https://supabase.com/docs/reference/javascript/auth-updateuser), [Auth redirect URL 설정](https://supabase.com/docs/guides/auth/redirect-urls)을 확인했다.
+
+## 복구용 클라이언트 정리 리뷰 수정
+
+2026-10-12, 링크 교체·화면 종료·비밀번호 변경 성공 시 복구용 Auth 클라이언트를 정리하도록 수정했다. 참조를 즉시 해제하고 초기화와 시작된 인증 요청이 모두 끝난 뒤 `auth.dispose()`를 호출한다. 요청이 실패해도 정리가 진행되며, 이전 링크의 늦은 응답을 무시하는 처리는 유지한다. 복구 화면은 설치된 SDK의 `AuthClient`를 직접 사용해 필요 없는 Realtime 클라이언트를 생성하지 않는다. URL과 anon key 헤더는 기존 Supabase 클라이언트의 Auth 구성과 동일하게 전달한다.
+
+`npm run test:login`은 26개가 통과했다. 추가 테스트는 반복 링크 교체·화면 종료의 리스너 정리, 종료 후 늦은 초기화, Strict Mode 재실행, 늦은 세션·변경 요청의 성공과 예외를 다룬다. 지연과 리스너 등록은 테스트용 SDK로 제어해 페이지의 정리 시점을 검사했다. 설치된 실제 Auth SDK로도 브라우저 객체를 대체한 별도 로컬 검사에서 초기화 후 `visibilitychange` 리스너 1개, `dispose()` 후 0개를 확인했다.
+
+`npx tsc --noEmit --incremental false`, `npm run build`, `git diff --check`도 통과했다. 이후 agent-browser로 최종 빌드의 실제 메일 요청→메일 링크→비밀번호 변경→이전 비밀번호 거절→새 비밀번호 로그인→사용한 링크 거절 흐름을 다시 확인했다. 임시 계정과 인증 파일, 검증 서버·브라우저는 정리했으며 원격 환경에는 접근하지 않았다.
+
+브라우저 검증 중 `createClient`가 생성한 Realtime 클라이언트의 `visibilitychange` 리스너도 남는 것을 발견해 Auth 전용 클라이언트로 변경했다. 관찰용 초기 스크립트는 실제 이벤트 등록·해제 동작을 유지하면서 window의 해당 리스너 개수만 기록했다. 최종 결과는 다음과 같다. Auth 리스너는 SDK 콜백의 `_onVisibilityChanged` 호출로 구분했다.
+
+| 최종 빌드 상태 | 전체 visibilitychange 리스너 | Auth 리스너 |
+|---|---:|---:|
+| 로그인 화면 기준 | 2 | 1 |
+| 유효한 복구 링크의 변경 화면 | 3 | 2 |
+| 비밀번호 변경 완료 | 2 | 1 |
+| 사용한 링크의 오류 화면 | 3 | 2 |
+| 같은 탭의 첫 번째·두 번째 오류 링크 교체 후 | 각각 3 | 각각 2 |
+| 오류 화면에서 로그인으로 복귀 후 | 2 | 1 |
+
+공용 로그인 클라이언트의 기존 리스너는 유지되며 복구용 리스너만 추가·제거된다. 반복 링크 교체로 개수가 누적되지 않았고, 브라우저 런타임 오류 수집 결과도 비어 있었다.
