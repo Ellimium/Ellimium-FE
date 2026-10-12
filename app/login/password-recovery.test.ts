@@ -33,21 +33,23 @@ function find(tree: React.ReactNode, predicate: (node: React.ReactElement<Props>
   }
 }
 
-function harness() {
+function harness(search = "?returnTo=%2Froom%3FroomId%3Dtest") {
   const states: unknown[] = [];
   const refs: { current: unknown }[] = [];
   let stateIndex = 0;
   let refIndex = 0;
+  let effect = () => {};
   let request = async (): Promise<{ error: unknown }> => ({ error: null });
   const calls: { name: string; email?: string; redirectTo?: string }[] = [];
   const destinations: string[] = [];
   const exports: { default?: () => React.ReactElement } = {};
   runInNewContext(compiled, {
     exports, URLSearchParams,
-    window: { location: { origin: "http://localhost:3000", search: "?returnTo=%2Froom%3FroomId%3Dtest" } },
+    window: { location: { origin: "http://localhost:3000", search } },
     FormData: class { get(name: string) { return ({ email: "player@example.com", password: "password", nickname: "모험가" } as Record<string, string>)[name]; } },
     require: (name: string) => {
       if (name === "react") return { ...React,
+        useEffect: (fn: () => void) => { effect = fn; },
         useState: (initial: unknown) => {
           const i = stateIndex++;
           if (!(i in states)) states[i] = initial;
@@ -76,7 +78,7 @@ function harness() {
   function submit(tree = render()) {
     return find(tree, (node) => node.type === "form")!.props.onSubmit!({ preventDefault() {}, currentTarget: {} });
   }
-  return { render, click, submit, calls, destinations,
+  return { render, click, submit, calls, destinations, mount: () => { render(); effect(); },
     request: (next: typeof request) => { request = next; },
     markup: () => renderToStaticMarkup(render()),
   };
@@ -91,6 +93,12 @@ test("복구 진입점은 이메일만 요청하고 로그인으로 돌아갈 �
   assert.doesNotMatch(markup, /name="password"|name="nickname"/);
   h.click("로그인");
   assert.match(h.markup(), /name="password"/);
+});
+
+test("만료 링크의 재요청 경로는 복구 모드로 바로 진입한다", () => {
+  const h = harness("?mode=recovery"); h.mount();
+  assert.match(h.markup(), /비밀번호 복구/);
+  assert.doesNotMatch(h.markup(), /name="password"/);
 });
 
 test("복구 요청은 현재 origin의 변경 화면을 지정하고 계정 존재를 드러내지 않는다", async () => {
