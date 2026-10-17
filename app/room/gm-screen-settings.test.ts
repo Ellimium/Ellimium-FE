@@ -40,3 +40,17 @@ test("첫 패널·마지막 패널·없는 패널은 목록 밖으로 이동하�
   assert.strictEqual(movePanel(settings, "dice", 1), settings);
   assert.strictEqual(movePanel(settings, "unknown", 1), settings);
 });
+
+
+test("예전 턴 순서 패널을 제외해도 나머지 저장 순서·표시·접힘 상태를 유지한다", () => {
+  assert.deepEqual(restorePanelSettings(["chat", "dice", "jukebox"], [
+    { panel_id: "initiative", collapsed: false, visible: true, position: 0 },
+    { panel_id: "dice", collapsed: true, visible: true, position: 1 },
+    { panel_id: "jukebox", collapsed: false, visible: false, position: 2 },
+    { panel_id: "chat", collapsed: false, visible: true, position: 3 },
+  ]), [
+    { panel_id: "dice", collapsed: true, visible: true, position: 0 },
+    { panel_id: "jukebox", collapsed: false, visible: false, position: 1 },
+    { panel_id: "chat", collapsed: false, visible: true, position: 2 },
+  ]);
+});

@@ -24,6 +24,7 @@ function renderMap(role: RoomRole | null, loadedRole = role, checking = false, r
   const map = { id: "map-a", asset_id: "asset-a", grid_cell_size: 50, grid_offset_x: 0, grid_offset_y: 0, fog_enabled: false, mapUrl: "https://example.com/map.png" };
   const states = runtime.states ?? [[map], [{ id: "token-a", map_id: "map-a", owner_id: "other", name: "타인 토큰", x: 0, y: 0, size: 1 }], [], [], loadedRole,
     "map-a", { width: 100, height: 100 }, false, false, "", "", null, [], "all", "reveal", null, false, false, [], "freehand", "#E0B45B", 4, "", false, null, "", false];
+  runtime.states = states;
   let index = 0;
   let refIndex = 0;
   const exports: { default?: React.FunctionComponent<{ roomId: string }> } = {};
@@ -39,6 +40,12 @@ function renderMap(role: RoomRole | null, loadedRole = role, checking = false, r
       if (name === "./room-permissions") return { useRoomPermissions: () => ({ role, currentUserId: "me", members: [], checking, error: runtime.error ?? "", loading: false,
         canUse: runtime.canUse ?? ((feature: string) => !checking || feature === "map_view") }) };
       if (name === "@/lib/supabase/client") return { supabase: runtime.client ?? {} };
+      if (name === "./room-tools") {
+        const toolExports = {};
+        const source = ts.transpileModule(readFileSync(new URL("room-tools.tsx", import.meta.url), "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
+        runInNewContext(source, { exports: toolExports, require });
+        return toolExports;
+      }
       if (name === "./map-drawing-shape") return { __esModule: true, default: () => null };
       return require(name.startsWith("./") || name.startsWith("../") ? `${name}.ts` : name);
     },
@@ -157,4 +164,135 @@ test("조회 중 종료한 그림·Fog는 재확인 뒤 저장하며 강등 시 
     assert.equal(h.saved.length, role === "master" ? 1 : 0);
     assert.equal(h.states[type === "drawing" ? 24 : 15], null);
   }
+});
+
+function element(tree: React.ReactNode, predicate: (node: React.ReactElement<Record<string, unknown>>) => boolean): React.ReactElement<Record<string, unknown>> | undefined {
+  if (!React.isValidElement<Record<string, unknown>>(tree)) return;
+  if (predicate(tree)) return tree;
+  for (const child of React.Children.toArray(tree.props.children as React.ReactNode)) {
+    const found = element(child, predicate);
+    if (found) return found;
+  }
+}
+
+function tools(runtime: MapRuntime) {
+  return element(runtime.tree, (node) => typeof node.props.onDrawing === "function")!.props as {
+    canDraw: boolean; canManageMap: boolean; onDrawing: () => void; onFog: () => void;
+  };
+}
+
+test("도구 레일은 역할별 실제 그리기·시야 권한을 사용한다", () => {
+  for (const role of ["master", "player", "spectator"] as const) {
+    const runtime: MapRuntime = { canUse: (feature) => feature === "map_view" || role !== "spectator" };
+    const html = renderMap(role, role, false, runtime);
+    assert.equal(tools(runtime).canDraw, role !== "spectator");
+    assert.equal(tools(runtime).canManageMap, role === "master");
+    assert.doesNotMatch(html, /aria-label="(?:선택|이동|거리 측정|설정)"/);
+    assert.match(html, /aria-controls="map-drawing-controls"/);
+    assert.match(html, /aria-controls="map-fog-controls"/);
+  }
+});
+
+test("맵 없음·이미지 로딩·조회 중·오류·권한 상실 시 레일에서 편집을 열지 않는다", () => {
+  for (const scenario of ["empty", "image", "loading", "checking", "error", "permission-error", "denied"] as const) {
+    const runtime: MapRuntime = {};
+    renderMap("master", "master", false, runtime);
+    if (scenario === "empty") runtime.states![0] = [];
+    if (scenario === "image") runtime.states![6] = null;
+    if (scenario === "loading") runtime.states![7] = true;
+    if (scenario === "error") runtime.states![9] = "맵 조회 실패";
+    if (scenario === "permission-error") runtime.error = "권한 조회 실패";
+    if (scenario === "denied") runtime.canUse = () => false;
+    renderMap("master", "master", scenario === "checking", runtime);
+    assert.equal(tools(runtime).canDraw, false, scenario);
+    assert.equal(tools(runtime).canManageMap, false, scenario);
+    tools(runtime).onDrawing(); tools(runtime).onFog();
+    assert.equal(runtime.states![23], false, scenario);
+    assert.equal(runtime.states![16], false, scenario);
+  }
+});
+
+test("레일과 기존 summary에서 편집을 전환하고 닫으면 토큰 조작 화면으로 복귀한다", () => {
+  const runtime: MapRuntime = {};
+  renderMap("master", "master", false, runtime);
+  tools(runtime).onDrawing();
+  let html = renderMap("master", "master", false, runtime);
+  assert.match(html, /drawing-interaction/);
+  assert.equal(runtime.states![16], false);
+  tools(runtime).onFog();
+  renderMap("master", "master", false, runtime);
+  assert.equal(runtime.states![23], false);
+  assert.equal(runtime.states![16], true);
+  const summary = element(runtime.tree, (node) => node.type === "summary" && node.props.children === "Fog of War")!;
+  (summary.props.onClick as (event: { preventDefault: () => void }) => void)({ preventDefault() {} });
+  html = renderMap("master", "master", false, runtime);
+  assert.equal(runtime.states![16], false);
+  assert.doesNotMatch(html, /drawing-interaction|fog-interaction/);
+  assert.match(html, /role="button" tabindex="0"/);
+});
+
+test("그리기 종료 후 토큰의 방향키 이동과 좌표 저장을 유지한다", () => {
+  const h = dragHarness();
+  h.states[11] = null; h.states[15] = null; h.states[24] = null;
+  h.states[16] = false; h.states[23] = false;
+  h.render(false);
+  const token = element(h.runtime.tree, (node) => node.props.role === "button")!;
+  let prevented = false;
+  (token.props.onKeyDown as (event: { key: string; preventDefault: () => void }) => void)({ key: "ArrowRight", preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.saved)), [{ x: 5, y: 4 }]);
+});
+
+
+test("빈 텍스트 입력 오류 뒤에도 그리기를 다시 열고 시야로 전환한다", () => {
+  const runtime: MapRuntime = {};
+  renderMap("master", "master", false, runtime);
+  tools(runtime).onDrawing();
+  runtime.states![19] = "text";
+  renderMap("master", "master", false, runtime);
+  const overlay = element(runtime.tree, node => node.props.className === "drawing-interaction")!;
+  const svg = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) };
+  (overlay.props.onPointerDown as (event: unknown) => void)({ clientX: 30, clientY: 30, currentTarget: { ownerSVGElement: svg } });
+  assert.match(renderMap("master", "master", false, runtime), /텍스트를 입력한 뒤 맵을 선택하세요/);
+  const summary = element(runtime.tree, node => node.type === "summary" && node.props.children === "그리기")!;
+  (summary.props.onClick as (event: { preventDefault: () => void }) => void)({ preventDefault() {} });
+  renderMap("master", "master", false, runtime);
+  assert.equal(runtime.states![23], false);
+  assert.equal(tools(runtime).canDraw, true);
+  assert.equal(tools(runtime).canManageMap, true);
+  tools(runtime).onDrawing();
+  assert.match(renderMap("master", "master", false, runtime), /drawing-interaction/);
+  tools(runtime).onFog();
+  renderMap("master", "master", false, runtime);
+  assert.equal(runtime.states![23], false);
+  assert.equal(runtime.states![16], true);
+});
+
+test("그림 저장 실패 뒤 재열기·재시도가 가능하고 성공하면 오류를 지운다", async () => {
+  let fail = true;
+  const runtime: MapRuntime = { client: { from: () => ({ insert: (row: object) => ({ select: () => ({ single: async () => fail
+    ? { data: null, error: { message: "일시적 저장 실패" } }
+    : { data: { ...row, id: "drawing-retry" }, error: null } }) }) }) } };
+  renderMap("master", "master", false, runtime);
+  tools(runtime).onDrawing();
+  runtime.states![19] = "text";
+  runtime.states![22] = "재시도";
+  function draw() {
+    renderMap("master", "master", false, runtime);
+    const overlay = element(runtime.tree, node => node.props.className === "drawing-interaction")!;
+    const svg = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) };
+    (overlay.props.onPointerDown as (event: unknown) => void)({ clientX: 30, clientY: 30, currentTarget: { ownerSVGElement: svg } });
+  }
+  draw();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.match(renderMap("master", "master", false, runtime), /그림을 저장할 수 없습니다/);
+  tools(runtime).onDrawing();
+  renderMap("master", "master", false, runtime);
+  assert.equal(tools(runtime).canDraw, true);
+  tools(runtime).onDrawing();
+  fail = false;
+  draw();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.doesNotMatch(renderMap("master", "master", false, runtime), /그림을 저장할 수 없습니다/);
+  assert.equal((runtime.states![18] as unknown[]).length, 1);
 });
