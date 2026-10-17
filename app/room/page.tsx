@@ -14,7 +14,6 @@ import { RoomJukeboxProvider } from "./room-jukebox";
 import RoomMap from "./room-map";
 import { RoomPermissionsProvider } from "./room-permissions";
 import { RoomConnectionProvider } from "./room-connection";
-import RoomTools from "./room-tools";
 
 export default async function Room({ searchParams }: { searchParams: Promise<{ roomId?: string }> }) {
   const { roomId } = await searchParams;
@@ -25,11 +24,7 @@ export default async function Room({ searchParams }: { searchParams: Promise<{ r
         <Link className="brand" href="/">ELLIMIUM</Link>
         <RoomHeader roomId={roomId} />
       </header>
-      <RoomTools />
-      <section className="map-stage" aria-label="게임 맵">
-        <div className="map-toolbar"><button type="button">−</button><span>75%</span><button type="button">＋</button></div>
-        <RoomMap roomId={roomId} />
-      </section>
+      <RoomMap roomId={roomId} />
       <GamePanels roomId={roomId} panels={[
         { id: "map-registration", title: "맵 등록", content: <MapRegistration roomId={roomId} /> },
         { id: "participants", title: "참가자", content: <Participants roomId={roomId} /> },

@@ -5,6 +5,7 @@ import { FormEvent, KeyboardEvent, PointerEvent, useEffect, useRef, useState } f
 import { assetImagePaths, type Asset } from "../assets/asset-images";
 import { supabase } from "@/lib/supabase/client";
 import MapDrawingShape from "./map-drawing-shape";
+import RoomTools from "./room-tools";
 import {
   canEditMapDrawing,
   createDrawingDraft,
@@ -102,6 +103,8 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   draggingRef.current = dragging;
   const pendingDragEnd = useRef<PendingDragEnd | null>(null);
   const visibilityVersion = useRef(0);
+  const drawingControls = useRef<HTMLDetailsElement>(null);
+  const fogControls = useRef<HTMLDetailsElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -263,7 +266,10 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
 
   useEffect(() => {
     setSelectedDrawingId("");
+    setDrawingEditing(false);
+    setFogEditing(false);
     setDrawingDrag(null);
+    setFogDragging(null);
     pendingDragEnd.current = null;
   }, [selectedId]);
 
@@ -414,8 +420,8 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       }
       setDragging(null);
     }
-    if (!canDraw) setDrawingDrag(null);
-    if (!canManageMap) setFogDragging(null);
+    if (!canDraw) { setDrawingDrag(null); setDrawingEditing(false); }
+    if (!canManageMap) { setFogDragging(null); setFogEditing(false); }
   }, [checking, canDraw, canManageMap, canMoveTokens, dragging]);
 
   useEffect(() => {
@@ -814,7 +820,28 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const maskId = selected ? `fog-visible-${selected.id}` : "fog-visible";
   const overlayMaskId = selected ? `fog-overlay-${selected.id}` : "fog-overlay";
 
+  const toolsReady = Boolean(selected && mapSize) && !loading && !error && !permissionLoading && !checking && !permissionError && !busy && !drawingBusy && !fogBusy && !dragging && !drawingDrag && !fogDragging;
+
+  function toggleDrawing(open: boolean) {
+    if (open && (!toolsReady || !canDraw)) return;
+    setDrawingEditing(open);
+    if (open) { setFogEditing(false); setFogDragging(null); }
+    if (!open) setDrawingDrag(null);
+  }
+
+  function toggleFog(open: boolean) {
+    if (open && (!toolsReady || !canManageMap)) return;
+    setFogEditing(open);
+    if (open) { setDrawingEditing(false); setDrawingDrag(null); }
+    if (!open) setFogDragging(null);
+  }
+
   return <>
+    <RoomTools canDraw={toolsReady && canDraw} canManageMap={toolsReady && canManageMap}
+      drawingEditing={Boolean(selected && canDraw && drawingEditing)} fogEditing={Boolean(selected && canManageMap && fogEditing)}
+      onDrawing={() => { toggleDrawing(!drawingEditing); drawingControls.current?.querySelector("summary")?.focus(); }}
+      onFog={() => { toggleFog(!fogEditing); fogControls.current?.querySelector("summary")?.focus(); }} />
+    <section className="map-stage" aria-label="게임 맵">
     <div className="battle-map" aria-busy={loading}>
       {!permissionLoading && !canViewMap && <p className="map-notice">맵 보기 권한이 없습니다.</p>}
       {selected && !mapSize && <img
@@ -890,11 +917,10 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         {previewArea && <rect className={`fog-preview fog-preview-${fogMode}`} {...previewArea} />}
       </svg>}
       {selected && <span className="token-permission">{permissionText}</span>}
-      {selected && (canDraw || (checking && drawingDrag)) && <details className="drawing-controls" onToggle={(event) => {
-        setDrawingEditing(event.currentTarget.open);
-        if (!event.currentTarget.open) setDrawingDrag(null);
+      {selected && (canDraw || (checking && drawingDrag)) && <details className="drawing-controls" id="map-drawing-controls" ref={drawingControls} open={drawingEditing} onToggle={(event) => {
+        if (event.currentTarget.open !== drawingEditing) toggleDrawing(event.currentTarget.open);
       }}>
-        <summary>그리기</summary>
+        <summary onClick={(event) => { event.preventDefault(); toggleDrawing(!drawingEditing); }}>그리기</summary>
         <div aria-busy={drawingBusy}>
           <fieldset><legend>도구</legend>{DRAWING_TYPES.map((type) => <button
             key={type}
@@ -930,8 +956,10 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
           <small>{fogEditing ? "시야 편집을 닫아야 그릴 수 있습니다." : drawingType === "text" ? "내용을 입력하고 맵을 클릭하세요." : "맵을 드래그해 그리세요."}</small>
         </div>
       </details>}
-      {selected && role === "master" && <details className="fog-controls" onToggle={(event) => setFogEditing(event.currentTarget.open)}>
-        <summary>Fog of War</summary>
+      {selected && role === "master" && <details className="fog-controls" id="map-fog-controls" ref={fogControls} open={fogEditing} onToggle={(event) => {
+        if (event.currentTarget.open !== fogEditing) toggleFog(event.currentTarget.open);
+      }}>
+        <summary onClick={(event) => { event.preventDefault(); toggleFog(!fogEditing); }}>Fog of War</summary>
         <div aria-busy={fogBusy}>
           <button type="button" disabled={fogBusy || !canManageMap} onClick={() => void setFogEnabled(!selected.fog_enabled)}>{selected.fog_enabled ? "Fog 끄기" : "Fog 켜기"}</button>
           <label>대상<select value={visibilityTarget} disabled={fogBusy || !canManageMap} onChange={(event) => setVisibilityTarget(event.target.value)}><option value="all">전체 플레이어</option>{players.map((player) => <option key={player.userId} value={player.userId}>{player.nickname}</option>)}</select></label>
@@ -960,5 +988,6 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         <span className="scene-thumbnail">{map.thumbnailUrl ? <img src={map.thumbnailUrl} alt="" /> : "맵"}</span>맵 {index + 1}
       </button>)}
     </div>
+    </section>
   </>;
 }

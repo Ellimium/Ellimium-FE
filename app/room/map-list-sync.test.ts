@@ -110,6 +110,7 @@ function harness(canView = true) {
         role: "player", currentUserId: "me", members: [], checking: false, error: "", loading: false, canUse: () => canView,
       }) };
       if (name === "@/lib/supabase/client") return { supabase };
+      if (name === "./room-tools") return { default: () => null };
       if (name === "./map-drawing-shape") return { default: () => null };
       return require(name.startsWith("./") || name.startsWith("../") ? `${name}.ts` : name);
     },
