@@ -242,3 +242,57 @@ test("그리기 종료 후 토큰의 방향키 이동과 좌표 저장을 유지
   assert.equal(prevented, true);
   assert.deepEqual(JSON.parse(JSON.stringify(h.saved)), [{ x: 5, y: 4 }]);
 });
+
+
+test("빈 텍스트 입력 오류 뒤에도 그리기를 다시 열고 시야로 전환한다", () => {
+  const runtime: MapRuntime = {};
+  renderMap("master", "master", false, runtime);
+  tools(runtime).onDrawing();
+  runtime.states![19] = "text";
+  renderMap("master", "master", false, runtime);
+  const overlay = element(runtime.tree, node => node.props.className === "drawing-interaction")!;
+  const svg = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) };
+  (overlay.props.onPointerDown as (event: unknown) => void)({ clientX: 30, clientY: 30, currentTarget: { ownerSVGElement: svg } });
+  assert.match(renderMap("master", "master", false, runtime), /텍스트를 입력한 뒤 맵을 선택하세요/);
+  const summary = element(runtime.tree, node => node.type === "summary" && node.props.children === "그리기")!;
+  (summary.props.onClick as (event: { preventDefault: () => void }) => void)({ preventDefault() {} });
+  renderMap("master", "master", false, runtime);
+  assert.equal(runtime.states![23], false);
+  assert.equal(tools(runtime).canDraw, true);
+  assert.equal(tools(runtime).canManageMap, true);
+  tools(runtime).onDrawing();
+  assert.match(renderMap("master", "master", false, runtime), /drawing-interaction/);
+  tools(runtime).onFog();
+  renderMap("master", "master", false, runtime);
+  assert.equal(runtime.states![23], false);
+  assert.equal(runtime.states![16], true);
+});
+
+test("그림 저장 실패 뒤 재열기·재시도가 가능하고 성공하면 오류를 지운다", async () => {
+  let fail = true;
+  const runtime: MapRuntime = { client: { from: () => ({ insert: (row: object) => ({ select: () => ({ single: async () => fail
+    ? { data: null, error: { message: "일시적 저장 실패" } }
+    : { data: { ...row, id: "drawing-retry" }, error: null } }) }) }) } };
+  renderMap("master", "master", false, runtime);
+  tools(runtime).onDrawing();
+  runtime.states![19] = "text";
+  runtime.states![22] = "재시도";
+  function draw() {
+    renderMap("master", "master", false, runtime);
+    const overlay = element(runtime.tree, node => node.props.className === "drawing-interaction")!;
+    const svg = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) };
+    (overlay.props.onPointerDown as (event: unknown) => void)({ clientX: 30, clientY: 30, currentTarget: { ownerSVGElement: svg } });
+  }
+  draw();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.match(renderMap("master", "master", false, runtime), /그림을 저장할 수 없습니다/);
+  tools(runtime).onDrawing();
+  renderMap("master", "master", false, runtime);
+  assert.equal(tools(runtime).canDraw, true);
+  tools(runtime).onDrawing();
+  fail = false;
+  draw();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.doesNotMatch(renderMap("master", "master", false, runtime), /그림을 저장할 수 없습니다/);
+  assert.equal((runtime.states![18] as unknown[]).length, 1);
+});

@@ -98,6 +98,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const [drawingDrag, setDrawingDrag] = useState<DrawingDrag | null>(null);
   const [selectedDrawingId, setSelectedDrawingId] = useState("");
   const [drawingBusy, setDrawingBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const draggingRef = useRef(dragging);
   draggingRef.current = dragging;
@@ -266,6 +267,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
 
   useEffect(() => {
     setSelectedDrawingId("");
+    setActionError("");
     setDrawingEditing(false);
     setFogEditing(false);
     setDrawingDrag(null);
@@ -477,7 +479,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
 
   async function persistPosition(tokenId: string, x: number, y: number, startX: number, startY: number) {
     if (!canMoveTokens) return;
-    setError("");
+    setActionError("");
     try {
       const { data, error: updateError } = await supabase
         .from("room_tokens")
@@ -492,7 +494,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
 
     setTokens((current) => current.map((token) => token.id === tokenId ? { ...token, x: startX, y: startY } : token));
     broadcastPosition(tokenId, startX, startY);
-    setError("토큰의 최종 위치를 저장할 수 없습니다.");
+    setActionError("토큰의 최종 위치를 저장할 수 없습니다.");
   }
 
   function finishDrag(event: PointerEvent<SVGSVGElement>) {
@@ -549,7 +551,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     const ownerId = String(form.get("ownerId") ?? "");
 
     setBusy(true);
-    setError("");
+    setActionError("");
     setMessage("");
     try {
       const { data, error: insertError } = await supabase.from("room_tokens").insert({
@@ -563,7 +565,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       }).select("id, map_id, owner_id, image_asset_id, name, x, y, size").single();
 
       if (insertError || !data) {
-        setError("토큰을 만들 수 없습니다. 이름, 이미지와 소유자를 확인하세요.");
+        setActionError("토큰을 만들 수 없습니다. 이름, 이미지와 소유자를 확인하세요.");
         return;
       }
 
@@ -575,7 +577,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       formElement.reset();
       setMessage("토큰을 배치했습니다.");
     } catch {
-      setError("토큰 서버에 연결하지 못했습니다. 저장 여부를 확인한 뒤 다시 시도하세요.");
+      setActionError("토큰 서버에 연결하지 못했습니다. 저장 여부를 확인한 뒤 다시 시도하세요.");
     } finally {
       setBusy(false);
     }
@@ -584,12 +586,12 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   async function setFogEnabled(enabled: boolean) {
     if (!selected || !canManageMap || fogBusy) return;
     setFogBusy(true);
-    setError("");
+    setActionError("");
     const { error: fogError } = await supabase.rpc("set_map_fog_enabled", {
       target_map_id: selected.id,
       new_fog_enabled: enabled,
     });
-    if (fogError) setError("Fog 상태를 변경할 수 없습니다.");
+    if (fogError) setActionError("Fog 상태를 변경할 수 없습니다.");
     else {
       visibilityVersion.current++;
       setMaps((current) => current.map((map) => map.id === selected.id ? { ...map, fog_enabled: enabled } : map));
@@ -611,7 +613,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   async function saveVisibility(areas: VisibilityArea[]) {
     if (!selected || !canManageMap || fogBusy) return;
     setFogBusy(true);
-    setError("");
+    setActionError("");
     const existing = targetRow(selected.id, visibilityTarget);
     const query = existing
       ? supabase.from("map_visibility").update({ revealed_areas: areas, inherits_common: false }).eq("id", existing.id)
@@ -624,7 +626,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     const { data, error: visibilityError } = await query
       .select("id, map_id, room_member_id, scope, inherits_common, revealed_areas")
       .single();
-    if (visibilityError || !data) setError("맵 시야 영역을 저장할 수 없습니다.");
+    if (visibilityError || !data) setActionError("맵 시야 영역을 저장할 수 없습니다.");
     else {
       visibilityVersion.current++;
       setVisibilityRows((current) => [...current.filter(({ id }) => id !== data.id), data as VisibilityRow]);
@@ -637,13 +639,13 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     const existing = targetRow(selected.id, visibilityTarget);
     if (!existing) return;
     setFogBusy(true);
-    setError("");
+    setActionError("");
     const { data, error: visibilityError } = await supabase.from("map_visibility")
       .update({ inherits_common: true })
       .eq("id", existing.id)
       .select("id, map_id, room_member_id, scope, inherits_common, revealed_areas")
       .single();
-    if (visibilityError || !data) setError("플레이어 시야를 공통 영역으로 되돌릴 수 없습니다.");
+    if (visibilityError || !data) setActionError("플레이어 시야를 공통 영역으로 되돌릴 수 없습니다.");
     else {
       visibilityVersion.current++;
       setVisibilityRows((current) => [...current.filter(({ id }) => id !== data.id), data as VisibilityRow]);
@@ -701,26 +703,26 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       drawingText,
     );
     if (!draft) {
-      setError(drawingType === "text" ? "텍스트를 입력한 뒤 맵을 선택하세요." : "그리려는 영역을 조금 더 크게 지정하세요.");
+      setActionError(drawingType === "text" ? "텍스트를 입력한 뒤 맵을 선택하세요." : "그리려는 영역을 조금 더 크게 지정하세요.");
       return;
     }
 
     setDrawingBusy(true);
-    setError("");
+    setActionError("");
     try {
       const { data, error: insertError } = await supabase
         .from("room_map_drawings")
         .insert({ map_id: selected.id, ...draft })
         .select("id, map_id, drawing_type, geometry, text_content, color, stroke_width, created_at, updated_at")
         .single();
-      if (insertError || !data) setError("그림을 저장할 수 없습니다.");
+      if (insertError || !data) setActionError("그림을 저장할 수 없습니다.");
       else {
         setDrawings((current) => [...current.filter(({ id }) => id !== data.id), data as MapDrawing]);
         setSelectedDrawingId(data.id);
         if (drawingType === "text") setDrawingText("");
       }
     } catch {
-      setError("그림 서버에 연결할 수 없습니다.");
+      setActionError("그림 서버에 연결할 수 없습니다.");
     } finally {
       setDrawingBusy(false);
     }
@@ -764,7 +766,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   async function updateSelectedDrawing() {
     if (!canDraw || !selectedDrawingId) return;
     setDrawingBusy(true);
-    setError("");
+    setActionError("");
     try {
       const { data, error: updateError } = await supabase
         .from("room_map_drawings")
@@ -772,10 +774,10 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         .eq("id", selectedDrawingId)
         .select("id, map_id, drawing_type, geometry, text_content, color, stroke_width, created_at, updated_at")
         .single();
-      if (updateError || !data) setError("그림 스타일을 변경할 수 없습니다.");
+      if (updateError || !data) setActionError("그림 스타일을 변경할 수 없습니다.");
       else setDrawings((current) => current.map((drawing) => drawing.id === data.id ? data as MapDrawing : drawing));
     } catch {
-      setError("그림 서버에 연결할 수 없습니다.");
+      setActionError("그림 서버에 연결할 수 없습니다.");
     } finally {
       setDrawingBusy(false);
     }
@@ -784,16 +786,16 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   async function deleteSelectedDrawing() {
     if (!canDraw || !selectedDrawingId) return;
     setDrawingBusy(true);
-    setError("");
+    setActionError("");
     try {
       const { error: deleteError } = await supabase.from("room_map_drawings").delete().eq("id", selectedDrawingId);
-      if (deleteError) setError("그림을 삭제할 수 없습니다.");
+      if (deleteError) setActionError("그림을 삭제할 수 없습니다.");
       else {
         setDrawings((current) => current.filter(({ id }) => id !== selectedDrawingId));
         setSelectedDrawingId("");
       }
     } catch {
-      setError("그림 서버에 연결할 수 없습니다.");
+      setActionError("그림 서버에 연결할 수 없습니다.");
     } finally {
       setDrawingBusy(false);
     }
@@ -980,7 +982,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         </form>
       </details>}
       {loading && <p className="map-notice">룸 맵을 불러오는 중…</p>}
-      {!loading && error && <p className="map-notice form-error" role="alert">{error}</p>}
+      {!loading && (error || actionError) && <p className="map-notice form-error" role="alert">{error || actionError}</p>}
       {!loading && !error && !selected && <p className="map-notice">등록된 룸 맵이 없습니다.</p>}
     </div>
     <div className="scene-tabs" aria-label="룸 맵 목록">
