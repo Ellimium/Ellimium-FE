@@ -159,6 +159,8 @@ h1,h2,p { margin-top:0; }
 .game-panel > .realtime-chat,.game-panel > .dice-panel { height:360px; }
 .gm-game-panel { display:flex; flex-direction:column; }
 .gm-panel { flex:none; min-width:0; }
+.preparation-panel { min-width:0; }
+.preparation-panel>summary { padding:10px 16px; border-bottom:1px solid var(--line); background:#191c1e; font-size:11px; cursor:pointer; }
 .gm-panel .realtime-chat { height:360px; }
 .chat-panel.realtime-chat { display:flex; flex-direction:column; }
 .realtime-chat .panel-tabs { min-height:42px; flex:none; }

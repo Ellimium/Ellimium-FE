@@ -116,7 +116,14 @@ export default function GamePanels({ panels, roomId }: { panels: Panel[]; roomId
   if ((role === "master" || keepMasterLayout) && currentUserId) {
     return <MasterPanels key={`${roomId}:${currentUserId}`} panels={panels} userId={currentUserId} />;
   }
+  const settings = defaultPanelSettings(panels.map((panel) => panel.id));
   return <aside className="game-panel" aria-label="게임 패널">
-    {panels.map((panel) => <Fragment key={panel.id}>{panel.content}</Fragment>)}
+    {panels.filter((panel) => panel.id !== "feature-permissions").map((panel) =>
+      settings.find((setting) => setting.panel_id === panel.id)?.collapsed
+        ? <details key={panel.id} className="preparation-panel">
+          <summary>{panel.title}</summary>
+          {panel.content}
+        </details>
+        : <Fragment key={panel.id}>{panel.content}</Fragment>)}
   </aside>;
 }
