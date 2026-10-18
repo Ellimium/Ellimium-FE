@@ -88,6 +88,7 @@ h1,h2,p { margin-top:0; }
 .topbar nav { display:flex; gap:34px; color:var(--muted); font-size:13px; }
 .topbar nav a { padding:30px 0; border-bottom:1px solid transparent; }
 .topbar nav .nav-active { color:var(--text); border-color:var(--gold); }
+.topbar a:focus-visible,.topbar button:focus-visible { outline:2px solid var(--gold); outline-offset:4px; }
 .account-actions { justify-self:end; display:flex; align-items:center; gap:16px; }
 .logout { display:flex; align-items:center; gap:8px; font-size:11px; }.logout span { max-width:180px; color:#dc9288; }
 .avatar { display:grid; place-items:center; width:34px; height:34px; border:1px solid #66573b; border-radius:50%; background:#2d251a; color:var(--gold-soft); font:700 13px Georgia,serif; }
@@ -196,7 +197,7 @@ h1,h2,p { margin-top:0; }
   .room-shell { grid-template:60px 620px auto/54px minmax(520px,1fr); overflow-x:auto; }.game-panel { grid-column:1/-1; grid-template-columns:1fr 1fr; border-top:1px solid var(--line); border-left:0; }.chat-panel { min-height:340px; }
 }
 @media (max-width:620px) {
-  .topbar { grid-template-columns:1fr auto; }.topbar nav { display:none; }.lobby-hero { align-items:start; flex-direction:column; padding-top:55px; }.lobby-actions { width:100%; flex-direction:column-reverse; }.lobby-actions a { width:100%; }.campaign-grid { grid-template-columns:1fr; }.login-story h1 { font-size:42px; }
+  .topbar { height:auto; grid-template-columns:1fr auto; grid-template-rows:64px auto; }.topbar nav { grid-column:1/-1; grid-row:2; justify-content:center; gap:0; }.topbar nav a { display:flex; align-items:center; justify-content:center; min-height:48px; padding:12px 20px; }.topbar .account-actions { grid-column:2; grid-row:1; }.lobby-hero { align-items:start; flex-direction:column; padding-top:55px; }.lobby-actions { width:100%; flex-direction:column-reverse; }.lobby-actions a { width:100%; }.campaign-grid { grid-template-columns:1fr; }.login-story h1 { font-size:42px; }
   .asset-library { padding:20px; }
   .room-title { display:none; }.room-topbar { grid-template-columns:1fr auto; }.game-panel { grid-template-columns:1fr; }
 }

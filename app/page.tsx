@@ -45,7 +45,7 @@ function Lobby() {
       <header className="topbar">
         <Link className="brand" href="/">ELLIMIUM</Link>
         <nav aria-label="주요 메뉴">
-          <Link className="nav-active" href="/">캠페인</Link>
+          <Link className="nav-active" href="/" aria-current="page">캠페인</Link>
           <Link href="/assets">자산</Link>
           <Link href="/music">음악</Link>
         </nav>
