@@ -86,7 +86,7 @@ function MasterPanels({ panels, userId }: { panels: Panel[]; userId: string }) {
     {settings.map((setting) => {
       const panel = panels.find((item) => item.id === setting.panel_id)!;
       const contentId = `gm-panel-${panel.id}`;
-      return <section key={panel.id} className="gm-panel" hidden={!setting.visible} aria-label={`${panel.title} 패널`}>
+      return <section key={panel.id} tabIndex={-1} className="gm-panel" hidden={!setting.visible} aria-label={`${panel.title} 패널`}>
         <div className="gm-panel-heading">
           <span>{panel.title}</span>
           <button type="button" disabled={disabled} aria-label={`${panel.title} ${setting.collapsed ? "펼치기" : "접기"}`}

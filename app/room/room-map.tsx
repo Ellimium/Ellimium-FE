@@ -843,7 +843,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       drawingEditing={Boolean(selected && canDraw && drawingEditing)} fogEditing={Boolean(selected && canManageMap && fogEditing)}
       onDrawing={() => { toggleDrawing(!drawingEditing); drawingControls.current?.querySelector("summary")?.focus(); }}
       onFog={() => { toggleFog(!fogEditing); fogControls.current?.querySelector("summary")?.focus(); }} />
-    <section className="map-stage" aria-label="게임 맵">
+    <section id="room-map" tabIndex={-1} className="map-stage" aria-label="게임 맵">
     <div className="battle-map" aria-busy={loading}>
       {!permissionLoading && !canViewMap && <p className="map-notice">맵 보기 권한이 없습니다.</p>}
       {selected && !mapSize && <img

@@ -212,7 +212,7 @@ export default function CharacterSheets({ roomId }: { roomId?: string }) {
 
   if (!roomId) return null;
 
-  return <section className="character-sheets" aria-label="캐릭터 시트" aria-busy={loading || saving || rolling}>
+  return <section id="room-character-sheets" tabIndex={-1} className="character-sheets" aria-label="캐릭터 시트" aria-busy={loading || saving || rolling}>
     <div className="panel-heading"><div><p className="eyebrow">CHARACTER</p><h2>캐릭터 시트</h2></div><span>{loading ? "불러오는 중" : `${sheets.length}개`}</span></div>
     {error && <p className="form-error" role="alert">{error}</p>}
     {message && <p className="form-message" role="status">{message}</p>}

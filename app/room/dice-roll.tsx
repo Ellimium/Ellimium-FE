@@ -289,7 +289,7 @@ export default function DiceRoll({ roomId }: { roomId?: string }) {
     }
   }
 
-  return <section className="chat-panel dice-panel" aria-label="주사위" aria-busy={loading || loadingOlder || rolling || connection.state === "syncing"}>
+  return <section id="room-dice" tabIndex={-1} className="chat-panel dice-panel" aria-label="주사위" aria-busy={loading || loadingOlder || rolling || connection.state === "syncing"}>
     <div className="panel-tabs"><button className="active" type="button">주사위</button><span>기록</span><span role="status" className={`record-status record-status-${connection.state}`}>{RECORD_CONNECTION_LABELS[connection.state]}</span></div>
     {(connection.state === "error" || connection.state === "disconnected") && <button className="record-retry" type="button" onClick={connection.retry} aria-label="주사위 연결 및 기록 다시 시도">다시 시도</button>}
     <div className="dice-log-tools">

@@ -12,6 +12,7 @@ import Participants from "./participants";
 import RoomFeaturePermissions from "./room-feature-permissions";
 import { RoomJukeboxProvider } from "./room-jukebox";
 import RoomMap from "./room-map";
+import RoomQuickNavigation from "./room-quick-navigation";
 import { RoomPermissionsProvider } from "./room-permissions";
 import { RoomConnectionProvider } from "./room-connection";
 
@@ -24,6 +25,7 @@ export default async function Room({ searchParams }: { searchParams: Promise<{ r
         <Link className="brand" href="/">ELLIMIUM</Link>
         <RoomHeader roomId={roomId} />
       </header>
+      <RoomQuickNavigation />
       <RoomMap roomId={roomId} />
       <GamePanels roomId={roomId} panels={[
         { id: "chat", title: "채팅", content: <Chat roomId={roomId} /> },
