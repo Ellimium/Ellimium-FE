@@ -18,6 +18,7 @@ import {
 import { hideArea, rectangleFromPoints, type VisibilityArea } from "./map-visibility";
 import { useRoomPermissions } from "./room-permissions";
 import { gridCoordinate, mapPointFromClient } from "./token-position";
+import { revealMapTab } from "./map-tab-scroll";
 
 type RoomMapRow = {
   id: string;
@@ -106,6 +107,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const visibilityVersion = useRef(0);
   const drawingControls = useRef<HTMLDetailsElement>(null);
   const fogControls = useRef<HTMLDetailsElement>(null);
+  const sceneTabs = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -264,6 +266,20 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }, [canViewMap, currentUserId, members, permissionLoading, role, roomId]);
 
   useEffect(() => { setMapSize(null); }, [selectedId]);
+
+  useEffect(() => {
+    const list = sceneTabs.current;
+    if (!list) return;
+    revealMapTab(list.querySelector<HTMLButtonElement>(".scene-active"));
+    let width = list.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (list.clientWidth === width) return;
+      width = list.clientWidth;
+      revealMapTab(list.querySelector<HTMLButtonElement>("button:focus") ?? list.querySelector<HTMLButtonElement>(".scene-active"));
+    });
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [selectedId]);
 
   useEffect(() => {
     setSelectedDrawingId("");
@@ -985,8 +1001,8 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       {!loading && (error || actionError) && <p className="map-notice form-error" role="alert">{error || actionError}</p>}
       {!loading && !error && !selected && <p className="map-notice">등록된 룸 맵이 없습니다.</p>}
     </div>
-    <div className="scene-tabs" aria-label="룸 맵 목록">
-      {maps.map((map, index) => <button className={map.id === selectedId ? "scene-active" : ""} type="button" key={map.id} onClick={() => setSelectedId(map.id)}>
+    <div className="scene-tabs" aria-label="룸 맵 목록" ref={sceneTabs}>
+      {maps.map((map, index) => <button className={map.id === selectedId ? "scene-active" : ""} type="button" key={map.id} onClick={() => setSelectedId(map.id)} onFocus={(event) => revealMapTab(event.currentTarget)}>
         <span className="scene-thumbnail">{map.thumbnailUrl ? <img src={map.thumbnailUrl} alt="" /> : "맵"}</span>맵 {index + 1}
       </button>)}
     </div>

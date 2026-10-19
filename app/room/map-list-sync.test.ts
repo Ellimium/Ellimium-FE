@@ -123,7 +123,7 @@ function harness(canView = true) {
     subscribeVisibility: () => {
       stateIndex = effectIndex = refIndex = 0;
       exports.default!({ roomId: "room" });
-      return effects[6]();
+      return effects.find((effect) => effect.toString().includes("map-visibility:"))!();
     },
     fog: (enabled: boolean) => fog({ new: { fog_enabled: enabled } }),
     visibility: (row: Record<string, unknown>) => visibility({ new: row }),
