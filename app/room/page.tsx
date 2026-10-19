@@ -12,6 +12,7 @@ import Participants from "./participants";
 import RoomFeaturePermissions from "./room-feature-permissions";
 import { RoomJukeboxProvider } from "./room-jukebox";
 import RoomMap from "./room-map";
+import RoomQuickNavigation from "./room-quick-navigation";
 import { RoomPermissionsProvider } from "./room-permissions";
 import { RoomConnectionProvider } from "./room-connection";
 
@@ -24,15 +25,16 @@ export default async function Room({ searchParams }: { searchParams: Promise<{ r
         <Link className="brand" href="/">ELLIMIUM</Link>
         <RoomHeader roomId={roomId} />
       </header>
+      <RoomQuickNavigation />
       <RoomMap roomId={roomId} />
       <GamePanels roomId={roomId} panels={[
+        { id: "chat", title: "채팅", content: <Chat roomId={roomId} /> },
+        { id: "dice", title: "주사위", content: <DiceRoll roomId={roomId} /> },
+        { id: "character-sheets", title: "캐릭터 시트", content: <CharacterSheets roomId={roomId} /> },
         { id: "map-registration", title: "맵 등록", content: <MapRegistration roomId={roomId} /> },
         { id: "participants", title: "참가자", content: <Participants roomId={roomId} /> },
         { id: "feature-permissions", title: "기능 권한", content: <RoomFeaturePermissions /> },
-        { id: "character-sheets", title: "캐릭터 시트", content: <CharacterSheets roomId={roomId} /> },
         { id: "jukebox", title: "주크박스", content: <Jukebox /> },
-        { id: "chat", title: "채팅", content: <Chat roomId={roomId} /> },
-        { id: "dice", title: "주사위", content: <DiceRoll roomId={roomId} /> },
       ]} />
     </main></RoomJukeboxProvider></RoomPermissionsProvider></RoomConnectionProvider></AuthGuard>
   );

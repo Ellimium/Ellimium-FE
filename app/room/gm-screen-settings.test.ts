@@ -2,6 +2,49 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultPanelSettings, movePanel, restorePanelSettings } from "./gm-screen-settings.ts";
 
+const roomPanelIds = ["chat", "dice", "character-sheets", "map-registration", "participants", "feature-permissions", "jukebox"];
+
+test("저장 설정이 없으면 플레이 패널은 펼치고 준비·관리 패널은 접는다", () => {
+  const settings = restorePanelSettings(roomPanelIds, []);
+  assert.deepEqual(settings, defaultPanelSettings(roomPanelIds));
+  assert.deepEqual(settings.map(({ panel_id, collapsed, visible, position }) =>
+    [panel_id, collapsed, visible, position]), [
+    ["chat", false, true, 0],
+    ["dice", false, true, 1],
+    ["character-sheets", false, true, 2],
+    ["map-registration", true, true, 3],
+    ["participants", true, true, 4],
+    ["feature-permissions", true, true, 5],
+    ["jukebox", true, true, 6],
+  ]);
+});
+
+test("새 기본값과 달라도 기존 GM의 순서·표시·접힘을 모두 보존한다", () => {
+  const saved = [...roomPanelIds].reverse().map((panel_id, position) => ({
+    panel_id, position, collapsed: panel_id === "chat", visible: panel_id !== "dice",
+  }));
+  assert.deepEqual(restorePanelSettings(roomPanelIds, saved), saved);
+  assert.equal(saved.find((setting) => setting.panel_id === "jukebox")?.collapsed, false);
+  assert.equal(defaultPanelSettings(roomPanelIds).find((setting) => setting.panel_id === "jukebox")?.collapsed, true);
+});
+
+test("일부 설정만 있으면 기존 설정 뒤에 누락 패널만 새 기본값으로 보충한다", () => {
+  const saved = [
+    { panel_id: "participants", collapsed: false, visible: false, position: 0 },
+    { panel_id: "chat", collapsed: true, visible: true, position: 1 },
+  ];
+  const restored = restorePanelSettings(roomPanelIds, saved);
+  assert.deepEqual(restored.slice(0, 2), saved);
+  assert.deepEqual(restored.slice(2), [
+    { panel_id: "dice", collapsed: false, visible: true, position: 2 },
+    { panel_id: "character-sheets", collapsed: false, visible: true, position: 3 },
+    { panel_id: "map-registration", collapsed: true, visible: true, position: 4 },
+    { panel_id: "feature-permissions", collapsed: true, visible: true, position: 5 },
+    { panel_id: "jukebox", collapsed: true, visible: true, position: 6 },
+  ]);
+  assert.deepEqual(saved.map((setting) => setting.position), [0, 1]);
+});
+
 test("패널 이동은 접힘·표시 상태를 보존하고 배치 순서를 다시 매긴다", () => {
   const settings = defaultPanelSettings(["chat", "jukebox", "dice"]);
   settings[1] = { ...settings[1], collapsed: true, visible: false };

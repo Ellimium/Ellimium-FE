@@ -335,7 +335,7 @@ export default function Chat({ roomId }: { roomId?: string }) {
 
   if (!roomId) return null;
 
-  return <section className="chat-panel realtime-chat" aria-label="실시간 채팅" aria-busy={loading || loadingOlder || sending || connection.state === "syncing"}>
+  return <section id="room-chat" tabIndex={-1} className="chat-panel realtime-chat" aria-label="실시간 채팅" aria-busy={loading || loadingOlder || sending || connection.state === "syncing"}>
     <div className="panel-tabs"><span className="active">채팅</span><button className={showSystemMessages ? "active" : ""} type="button" aria-pressed={showSystemMessages} onClick={() => setShowSystemMessages((current) => !current)}>{showSystemMessages ? "시스템 숨기기" : "시스템 보기"}</button><span role="status" className={`record-status record-status-${connection.state}`}>{RECORD_CONNECTION_LABELS[connection.state]}</span></div>
     {(connection.state === "error" || connection.state === "disconnected") && <button className="record-retry" type="button" onClick={connection.retry} aria-label="채팅 연결 및 기록 다시 시도">다시 시도</button>}
     {!loading && role && loadedRole === role && <div className="chat-history-controls">

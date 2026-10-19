@@ -1,7 +1,12 @@
 export type PanelSetting = { panel_id: string; collapsed: boolean; visible: boolean; position: number };
 
 export function defaultPanelSettings(panelIds: string[]): PanelSetting[] {
-  return panelIds.map((panel_id, position) => ({ panel_id, collapsed: false, visible: true, position }));
+  return panelIds.map((panel_id, position) => ({
+    panel_id,
+    collapsed: ["map-registration", "participants", "feature-permissions", "jukebox"].includes(panel_id),
+    visible: true,
+    position,
+  }));
 }
 
 export function restorePanelSettings(panelIds: string[], rows: unknown[]): PanelSetting[] {
