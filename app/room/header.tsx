@@ -54,7 +54,7 @@ export default function RoomHeader({ roomId }: { roomId?: string }) {
   return <>
     <div className="room-title"><strong>{room?.name ?? "플레이 룸"}</strong><span>{room?.game_system ?? (error || "룸 정보 불러오는 중…")}</span></div>
     <div className="room-actions" onBlur={(event) => {
-      if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) setOpen(false);
     }}>
       <span role="status" className={`live-dot record-status-${connection.state}`}>{RECORD_CONNECTION_LABELS[connection.state]}</span>
       {(connection.state === "error" || connection.state === "disconnected") && <button type="button" onClick={connection.retry}>다시 시도</button>}
