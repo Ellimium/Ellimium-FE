@@ -71,16 +71,18 @@ const DRAWING_LABELS: Record<DrawingType, string> = {
 export default function RoomMap({ roomId }: { roomId?: string }) {
   const { role, currentUserId, members, checking, error: permissionError, canUse, loading: permissionLoading } = useRoomPermissions();
   const canViewMap = !permissionLoading && canUse("map_view");
-  const canMoveTokens = canViewMap && canUse("token_move") && (role === "master" || role === "player");
   const [maps, setMaps] = useState<DisplayMap[]>([]);
   const [tokens, setTokens] = useState<DisplayToken[]>([]);
   const [tokenAssets, setTokenAssets] = useState<TokenAsset[]>([]);
   const [players, setPlayers] = useState<PlayerOption[]>([]);
   const [loadedRole, setLoadedRole] = useState<typeof role>(null);
-  const canManageMap = role === "master" && !permissionLoading && !checking && !permissionError && loadedRole === role;
-  const canDraw = canEditMapDrawing(canViewMap, canUse("drawing"), role);
   const [selectedId, setSelectedId] = useState("");
-  const [mapSize, setMapSize] = useState<{ width: number; height: number } | null>(null);
+  const selected = canViewMap && loadedRole === role ? maps.find((map) => map.id === selectedId) : undefined;
+  const [mapImage, setMapImage] = useState<{ mapId: string; assetId: string; width: number; height: number } | null>(null);
+  const mapSize = selected?.mapUrl && mapImage?.mapId === selected.id && mapImage.assetId === selected.asset_id ? mapImage : null;
+  const canMoveTokens = Boolean(mapSize) && canViewMap && canUse("token_move") && (role === "master" || role === "player");
+  const canManageMap = Boolean(mapSize) && role === "master" && !permissionLoading && !checking && !permissionError && loadedRole === role;
+  const canDraw = Boolean(mapSize) && canEditMapDrawing(canViewMap, canUse("drawing"), role);
   const [loading, setLoading] = useState(Boolean(roomId));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -126,7 +128,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       setVisibilityRows([]);
       setDrawings([]);
       setSelectedId("");
-      setMapSize(null);
+      setMapImage(null);
       setDragging(null);
       setLoading(false);
       setError("");
@@ -262,7 +264,9 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     };
   }, [canViewMap, currentUserId, members, permissionLoading, role, roomId]);
 
-  useEffect(() => { setMapSize(null); }, [selectedId]);
+  useEffect(() => {
+    if (!selected?.mapUrl) setMapImage(null);
+  }, [selectedId, selected?.mapUrl]);
 
   useEffect(() => {
     const list = sceneTabs.current;
@@ -816,7 +820,6 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
 
   const labels = assetLabels(maps.map((map) => ({ id: map.asset_id, category: "map" })));
   const registrationIds = shortIds(maps.map((map) => map.id));
-  const selected = canViewMap && loadedRole === role ? maps.find((map) => map.id === selectedId) : undefined;
   const selectedTokens = tokens.filter((token) => token.map_id === selectedId);
   const selectedDrawings = drawings.filter((drawing) => drawing.map_id === selectedId);
   // ponytail: 그리드 미설정 맵은 50px 셀로 표시하며 자유 배치가 필요해지면 픽셀 좌표 모드를 분리한다.
@@ -866,7 +869,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         className="room-map-image"
         src={selected.mapUrl}
         alt="등록된 룸 맵"
-        onLoad={(event) => setMapSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+        onLoad={(event) => setMapImage({ mapId: selected.id, assetId: selected.asset_id, width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
       />}
       {selected && mapSize && <svg
         className="room-map-canvas"

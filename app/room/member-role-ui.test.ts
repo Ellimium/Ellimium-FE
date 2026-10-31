@@ -23,7 +23,7 @@ type MapRuntime = {
 function renderMap(role: RoomRole | null, loadedRole = role, checking = false, runtime: MapRuntime = {}) {
   const map = { id: "map-a", asset_id: "asset-a", grid_cell_size: 50, grid_offset_x: 0, grid_offset_y: 0, fog_enabled: false, mapUrl: "https://example.com/map.png" };
   const states = runtime.states ?? [[map], [{ id: "token-a", map_id: "map-a", owner_id: "other", name: "타인 토큰", x: 0, y: 0, size: 1 }], [], [], loadedRole,
-    "map-a", { width: 100, height: 100 }, false, false, "", "", null, [], "all", "reveal", null, false, false, [], "freehand", "#E0B45B", 4, "", false, null, "", false];
+    "map-a", { mapId: "map-a", assetId: map.asset_id, width: 100, height: 100 }, false, false, "", "", null, [], "all", "reveal", null, false, false, [], "freehand", "#E0B45B", 4, "", false, null, "", false];
   runtime.states = states;
   let index = 0;
   let refIndex = 0;
@@ -81,7 +81,7 @@ function dragHarness() {
   const points = [{ x: 10, y: 10 }, { x: 20, y: 20 }];
   const states: unknown[] = [[{ id: "map-a", asset_id: "asset-a", grid_cell_size: 50, grid_offset_x: 0, grid_offset_y: 0, fog_enabled: true, mapUrl: "https://example.com/map.png" }],
     [{ id: "token-a", map_id: "map-a", owner_id: "me", name: "토큰", x: 4, y: 4, size: 1 }], [], [], "master",
-    "map-a", { width: 500, height: 500 }, false, false, "", "", drag, [], "all", "reveal",
+    "map-a", { mapId: "map-a", assetId: "asset-a", width: 500, height: 500 }, false, false, "", "", drag, [], "all", "reveal",
     { pointerId: 1, start: points[0], current: points[1] }, true, false, [], "freehand", "#E0B45B", 4, "", true,
     { pointerId: 1, points }, "", false];
   const sent: unknown[] = [];
@@ -306,4 +306,49 @@ test("같은 자산을 가리키는 탭도 등록 ID로 구분하고 이미지 �
   runtime.states![0] = ids.map(id => ({ ...first, id, mapUrl: undefined }));
   const html = renderMap("master", "master", false, runtime);
   for (const id of ids) assert.ok(html.includes(`aria-label="맵 · asset-a · 등록 ${id}"`));
+});
+
+test("같은 맵의 이미지 재조회 실패 후 복구되면 새 이미지 로드 전까지 캔버스와 편집을 잠근다", () => {
+  const runtime: MapRuntime = { effects: [] };
+  assert.match(renderMap("master", "master", false, runtime), /<svg/);
+  assert.equal(tools(runtime).canDraw, true);
+  let previous = runtime.effects!;
+  function render() {
+    runtime.effects = [];
+    const html = renderMap("master", "master", false, runtime);
+    for (const [i, effect] of runtime.effects.entries()) {
+      if (!effect.callback.toString().includes("supabase") && effect.deps.some((dep, j) => !Object.is(dep, previous[i]?.deps[j]))) effect.callback();
+    }
+    previous = runtime.effects;
+    return html;
+  }
+  const map = (runtime.states![0] as { mapUrl?: string }[])[0];
+  const url = map.mapUrl;
+  map.mapUrl = undefined;
+  runtime.states![23] = true; runtime.states![16] = true;
+  const failed = render();
+  assert.doesNotMatch(failed, /<svg/);
+  assert.equal(tools(runtime).canDraw, false); assert.equal(tools(runtime).canManageMap, false);
+  assert.equal(runtime.states![23], false); assert.equal(runtime.states![16], false);
+  assert.match(failed, /aria-label="맵 · asset-a · 등록 map-a"/);
+  map.mapUrl = url;
+  const recovering = render();
+  assert.doesNotMatch(recovering, /<svg/);
+  assert.equal(tools(runtime).canDraw, false); assert.equal(tools(runtime).canManageMap, false);
+  const image = element(runtime.tree!, node => node.type === "img" && node.props.alt === "등록된 룸 맵");
+  assert.ok(image);
+  (image.props.onLoad as (event: object) => void)({ currentTarget: { naturalWidth: 640, naturalHeight: 480 } });
+  const recovered = render();
+  assert.match(recovered, /viewBox="0 0 640 480"/);
+  assert.equal(tools(runtime).canDraw, true); assert.equal(tools(runtime).canManageMap, true);
+});
+
+
+test("정상 자산의 서명 URL 갱신은 진행 중인 토큰·그림·시야 드래그를 취소하지 않는다", () => {
+  const h = dragHarness();
+  const before = [h.states[11], h.states[15], h.states[24]];
+  (h.states[0] as { mapUrl: string }[])[0].mapUrl += "?renewed";
+  assert.match(h.render(false), /<svg/);
+  assert.deepEqual([h.states[11], h.states[15], h.states[24]], before);
+  assert.deepEqual(h.sent, []); assert.deepEqual(h.saved, []);
 });
