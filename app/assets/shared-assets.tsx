@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
-import { Asset } from "./asset-images";
+import AssetImage from "./asset-image";
+import { Asset, assetImagePaths, assetLabels } from "./asset-images";
 import { releaseSharedImages, sharedImageUrls } from "./shared-images";
 
 type SharedAsset = Asset & { owner_id: string };
@@ -31,8 +32,7 @@ function RoomAssets({ roomId }: { roomId: string }) {
           .in("id", ids).order("created_at", { ascending: false }).abortSignal(controller.signal)
           : { data: [], error: null };
         if (result.error) throw result.error;
-        urls = await sharedImageUrls(result.data.flatMap((asset) =>
-          [asset.thumbnail_storage_path ?? asset.storage_path, ...(asset.category === "map" ? [asset.storage_path] : [])]),
+        urls = await sharedImageUrls(assetImagePaths(result.data),
         session.access_token, controller.signal);
         if (controller.signal.aborted) { releaseSharedImages(urls); return; }
         setUserId(session.user.id);
@@ -48,18 +48,19 @@ function RoomAssets({ roomId }: { roomId: string }) {
     return () => { controller.abort(); releaseSharedImages(urls); };
   }, [roomId]);
 
+  const labels = assetLabels(assets);
   if (loading) return <p className="muted" role="status">룸 공용 자산을 불러오는 중…</p>;
   if (error) return <p className="form-error" role="alert">{error}</p>;
   if (!assets.length) return <p className="muted">이 룸에 공유된 자산이 없습니다.</p>;
   return <div className="asset-grid">
     {assets.map((asset) => <article className="asset-card" key={asset.id}>
-      <div className="asset-thumbnail"><img
+      <div className="asset-thumbnail"><AssetImage
         src={images.get(asset.thumbnail_storage_path ?? asset.storage_path)}
-        alt={`${asset.category} 공용 자산`}
+        alt={`${labels.get(asset.id)} 공용 자산 미리보기`}
       /></div>
-      <div><strong>{asset.category === "map" ? "맵" : asset.category === "token" ? "토큰" : asset.category === "item" ? "아이템" : "기타"}</strong>
+      <div><strong title={asset.id}>{labels.get(asset.id)}</strong>
         <small>룸 공용 · {asset.owner_id === userId ? "내 자산" : "다른 구성원의 자산"}</small></div>
-      {asset.category === "map" && <img className="asset-map-result" src={images.get(asset.storage_path)} alt="공유된 맵" />}
+      {asset.category === "map" && <AssetImage className="asset-map-result" src={images.get(asset.storage_path)} alt={`${labels.get(asset.id)} 공유된 맵`} />}
     </article>)}
   </div>;
 }

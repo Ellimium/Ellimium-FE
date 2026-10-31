@@ -2,7 +2,7 @@ export async function sharedImageUrls(
   paths: string[], token: string, signal: AbortSignal,
 ) {
   const uniquePaths = [...new Set(paths)];
-  const blobs = await Promise.all(uniquePaths.map(async (path) => {
+  const results = await Promise.allSettled(uniquePaths.map(async (path) => {
     const encodedPath = path.split("/").map(encodeURIComponent).join("/");
     const response = await fetch(
       `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/authenticated/assets/${encodedPath}`,
@@ -15,7 +15,8 @@ export async function sharedImageUrls(
     return response.blob();
   }));
   signal.throwIfAborted();
-  return new Map(uniquePaths.map((path, index) => [path, URL.createObjectURL(blobs[index])]));
+  return new Map(results.flatMap((result, index) => result.status === "fulfilled"
+    ? [[uniquePaths[index], URL.createObjectURL(result.value)]] : []));
 }
 
 export function releaseSharedImages(urls: Map<string, string>) {

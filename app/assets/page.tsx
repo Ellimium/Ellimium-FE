@@ -6,8 +6,9 @@ import { FormEvent, useEffect, useState } from "react";
 
 import AuthGuard from "../auth-guard";
 import { supabase } from "@/lib/supabase/client";
-import { Asset, assetImagePaths } from "./asset-images";
+import { Asset, assetImagePaths, assetLabels } from "./asset-images";
 import { validateUpload } from "./upload-validation";
+import AssetImage from "./asset-image";
 import AssetFolders from "./asset-folders";
 import SharedAssets from "./shared-assets";
 import AssetSharing from "./asset-sharing";
@@ -44,6 +45,7 @@ export default function Assets() {
   const tree = orderedFolders(folders ?? []);
   const selectedFolderId = folders && !folders.some((folder) => folder.id === folderId) ? "" : folderId;
   const selectedFolderName = selectedFolderId ? folders?.find((folder) => folder.id === selectedFolderId)?.name ?? "선택한 폴더" : "미분류";
+  const labels = assetLabels(assets);
   const visibleAssets = assetsInFolder(assets, selectedFolderId);
   const moveLocked = busy || moving || loadingAssets || !folders || !!assetsError;
 
@@ -64,11 +66,10 @@ export default function Assets() {
       const { data: signedUrls, error: signedUrlError } = imagePaths.length
         ? await supabase.storage.from("assets").createSignedUrls(imagePaths, 60 * 60)
         : { data: [], error: null };
-      if (signedUrlError) throw signedUrlError;
-      const urls = new Map(signedUrls.map(({ path, signedUrl }) => [path, signedUrl]));
+      const urls = new Map((signedUrlError ? [] : signedUrls ?? []).filter(({ error, signedUrl }) => !error && signedUrl).map(({ path, signedUrl }) => [path, signedUrl]));
       setAssets(data.map((asset) => ({
         ...asset,
-        thumbnailUrl: asset.thumbnail_storage_path ? urls.get(asset.thumbnail_storage_path) ?? undefined : undefined,
+        thumbnailUrl: urls.get(asset.thumbnail_storage_path ?? asset.storage_path) ?? undefined,
         mapUrl: asset.category === "map" ? urls.get(asset.storage_path) ?? undefined : undefined,
       })));
     } catch {
@@ -174,9 +175,9 @@ export default function Assets() {
         {moveMessage && <p className="form-message" role="status">{moveMessage}</p>}
         {loadingAssets ? <p className="muted">자산을 불러오는 중…</p> : assetsError ? null : visibleAssets.length === 0 ? <p className="muted">이 위치에 자산이 없습니다.</p> : <div className="asset-grid">
           {visibleAssets.map((asset) => <article className="asset-card" key={asset.id}>
-            <div className="asset-thumbnail">{asset.thumbnailUrl ? <img src={asset.thumbnailUrl} alt={`${asset.category} 썸네일`} /> : <span>{asset.category}</span>}</div>
-            <div><strong>{asset.category === "map" ? "맵" : asset.category === "token" ? "토큰" : asset.category === "item" ? "아이템" : "기타"}</strong><small>{asset.thumbnailUrl ? "사용자 썸네일" : "기본 썸네일"}</small></div>
-            {asset.mapUrl && <img className="asset-map-result" src={asset.mapUrl} alt="리사이징된 맵 결과" />}
+            <div className="asset-thumbnail"><AssetImage src={asset.thumbnailUrl} alt={`${labels.get(asset.id)} 미리보기`} /></div>
+            <div><strong title={asset.id}>{labels.get(asset.id)}</strong><small>{asset.thumbnail_storage_path ? "사용자 썸네일" : "실제 이미지"}</small></div>
+            {asset.mapUrl && <AssetImage className="asset-map-result" src={asset.mapUrl} alt={`${labels.get(asset.id)} 맵 결과`} />}
             <form className="asset-move" key={asset.folder_id ?? "unclassified"} onSubmit={(event) => void moveAsset(event, asset.id)}>
               <label>이동할 위치<select name="folder_id" defaultValue={asset.folder_id ?? ""} disabled={moveLocked}>
                 <option value="">미분류</option>

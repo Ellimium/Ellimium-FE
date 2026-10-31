@@ -273,3 +273,6 @@ h1,h2,p { margin-top:0; }
 .dice-panel > .panel-tabs { flex:none; min-height:42px; }
 .gm-panel .dice-panel { height:360px; }
 .dice-list { flex:1; overflow-anchor:none; }
+
+.asset-card strong { overflow-wrap:anywhere; }
+.asset-thumbnail>span,.asset-map-result[role="img"] { padding:10px; color:var(--muted); font-size:11px; text-align:center; }
