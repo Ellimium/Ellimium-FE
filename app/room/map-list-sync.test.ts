@@ -30,6 +30,7 @@ function harness(canView = true) {
   let visibility!: (payload: { new: Record<string, unknown> }) => void;
   let visibilityRows: Record<string, unknown>[] = [];
   let holdUrls = false;
+  let failUrls = false;
   let releaseUrls!: () => void;
   let status!: (status: string) => void;
   let insert!: () => void;
@@ -87,6 +88,7 @@ function harness(canView = true) {
         holdUrls = false;
         await new Promise<void>((resolve) => { releaseUrls = resolve; });
       }
+      if (failUrls) return { data: null, error: { message: "image failure" } };
       return { data: paths.map((path) => ({ path, signedUrl: `https://example.test/${path}` })), error: null };
     } }) },
   };
@@ -110,6 +112,7 @@ function harness(canView = true) {
         role: "player", currentUserId: "me", members: [], checking: false, error: "", loading: false, canUse: () => canView,
       }) };
       if (name === "@/lib/supabase/client") return { supabase };
+      if (name === "../assets/asset-picker" || name === "../assets/asset-image") return { default: () => null };
       if (name === "./room-tools") return { default: () => null };
       if (name === "./map-drawing-shape") return { default: () => null };
       return require(name.startsWith("./") || name.startsWith("../") ? `${name}.ts` : name);
@@ -117,6 +120,7 @@ function harness(canView = true) {
   });
   exports.default!({ roomId: "room" });
   return {
+    failUrls: () => { failUrls = true; },
     start: () => effect(), status: (value: string) => status(value), insert: () => insert(),
     local: () => window.dispatchEvent(Object.assign(new Event("room-map-registered"), { detail: "room" })),
     read: (callback: typeof read) => { read = callback; },
@@ -206,4 +210,15 @@ test("목록 조회 중 도착한 시야 영역 갱신을 오래된 조회로 �
   assert.ok(h.areaUpdates.slice(updateCount).every((rows) => (rows[0].revealed_areas as unknown[]).length === 0));
   assert.equal(h.maps.length, 2);
   disposeVisibility?.(); dispose?.();
+});
+
+
+test("이미지 URL 조회 실패가 등록 맵 목록과 선택을 제거하지 않는다", async () => {
+  const h = harness();
+  h.failUrls();
+  h.read(async () => ({ data: [map("first"), map("second")], error: null }));
+  const dispose = h.start(); await settle();
+  assert.deepEqual(Array.from(h.maps, row => row.id), ["first", "second"]);
+  assert.equal(h.selected, "first"); assert.equal(h.error, "");
+  dispose?.();
 });

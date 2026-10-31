@@ -2,8 +2,10 @@
 
 import { FormEvent, KeyboardEvent, PointerEvent, useEffect, useRef, useState } from "react";
 
-import { assetImagePaths, type Asset } from "../assets/asset-images";
+import { assetImagePaths, assetLabels, shortIds, type Asset } from "../assets/asset-images";
 import { supabase } from "@/lib/supabase/client";
+import AssetImage from "../assets/asset-image";
+import AssetPicker, { type PickerAsset } from "../assets/asset-picker";
 import MapDrawingShape from "./map-drawing-shape";
 import RoomTools from "./room-tools";
 import {
@@ -38,9 +40,9 @@ type RoomTokenRow = {
   y: number;
   size: number;
 };
-type DisplayMap = RoomMapRow & { mapUrl: string; thumbnailUrl?: string };
+type DisplayMap = RoomMapRow & { mapUrl?: string; thumbnailUrl?: string };
 type DisplayToken = RoomTokenRow & { imageUrl?: string };
-type TokenAsset = Pick<Asset, "id" | "storage_path">;
+type TokenAsset = PickerAsset;
 type PlayerOption = { userId: string; nickname: string };
 type DragState = { tokenId: string; pointerId: number; offsetX: number; offsetY: number; startX: number; startY: number };
 type VisibilityRow = {
@@ -164,7 +166,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
           ? supabase.from("profiles").select("user_id, nickname").in("user_id", playerIds)
           : Promise.resolve({ data: [], error: null }),
         role === "master"
-          ? supabase.from("assets").select("id, storage_path").eq("category", "token").eq("owner_id", currentUserId).order("created_at", { ascending: false })
+          ? supabase.from("assets").select("id, category, storage_path, thumbnail_storage_path").eq("category", "token").eq("owner_id", currentUserId).order("created_at", { ascending: false })
           : Promise.resolve({ data: [], error: null }),
         mapList.length
           ? supabase.from("room_tokens").select("id, map_id, owner_id, image_asset_id, name, x, y, size").in("map_id", mapList.map((map) => map.id)).order("created_at")
@@ -207,23 +209,18 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         : { data: [], error: null };
 
       if (!active || version !== loadVersion) return;
-      if (signedUrlError) {
-        setError("룸 맵과 토큰 이미지를 표시할 수 없습니다.");
-        setLoading(false);
-        return;
-      }
 
       // A live Fog/visibility change makes this snapshot stale; reload before applying it.
       if (loadedVisibilityVersion !== visibilityVersion.current) {
         load();
         return;
       }
-      const urls = new Map(signedUrls.map(({ path, signedUrl }) => [path, signedUrl]));
+      const urls = new Map((signedUrlError ? [] : signedUrls ?? []).filter(({ error, signedUrl }) => !error && signedUrl).map(({ path, signedUrl }) => [path, signedUrl]));
       const assetsById = new Map(assetList.map((asset) => [asset.id, asset]));
-      const nextMaps = mapList.flatMap((map) => {
+      const nextMaps = mapList.map((map) => {
         const asset = assetsById.get(map.asset_id);
-        const mapUrl = asset && urls.get(asset.storage_path);
-        return asset && mapUrl ? [{ ...map, mapUrl, thumbnailUrl: asset.thumbnail_storage_path ? urls.get(asset.thumbnail_storage_path) ?? undefined : undefined }] : [];
+        const mapUrl = asset ? urls.get(asset.storage_path) ?? undefined : undefined;
+        return { ...map, mapUrl, thumbnailUrl: asset ? urls.get(asset.thumbnail_storage_path ?? asset.storage_path) ?? undefined : undefined };
       });
 
       setLoadedRole(role);
@@ -817,6 +814,8 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     }
   }
 
+  const labels = assetLabels(maps.map((map) => ({ id: map.asset_id, category: "map" })));
+  const registrationIds = shortIds(maps.map((map) => map.id));
   const selected = canViewMap && loadedRole === role ? maps.find((map) => map.id === selectedId) : undefined;
   const selectedTokens = tokens.filter((token) => token.map_id === selectedId);
   const selectedDrawings = drawings.filter((drawing) => drawing.map_id === selectedId);
@@ -862,7 +861,8 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     <section id="room-map" tabIndex={-1} className="map-stage" aria-label="게임 맵">
     <div className="battle-map" aria-busy={loading}>
       {!permissionLoading && !canViewMap && <p className="map-notice">맵 보기 권한이 없습니다.</p>}
-      {selected && !mapSize && <img
+      {selected && !selected.mapUrl && <p className="map-notice">맵 이미지를 표시할 수 없습니다.</p>}
+      {selected?.mapUrl && !mapSize && <img
         className="room-map-image"
         src={selected.mapUrl}
         alt="등록된 룸 맵"
@@ -990,7 +990,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
         <summary>토큰 추가</summary>
         <form onSubmit={createToken} aria-busy={busy}>
           <label>이름<input name="name" required maxLength={50} disabled={busy || !canManageMap} /></label>
-          <label>이미지<select name="imageAssetId" defaultValue="" disabled={busy || !canManageMap}><option value="">이미지 없음</option>{tokenAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.storage_path.split("/").at(-1)}</option>)}</select></label>
+          <AssetPicker assets={tokenAssets} name="imageAssetId" label="이미지" allowEmpty disabled={busy || !canManageMap} />
           <label>소유자<select name="ownerId" defaultValue="" disabled={busy || !canManageMap}><option value="">미할당</option>{players.map((player) => <option key={player.userId} value={player.userId}>{player.nickname}</option>)}</select></label>
           <div><label>X<input name="x" type="number" step="any" defaultValue="0" required disabled={busy || !canManageMap} /></label><label>Y<input name="y" type="number" step="any" defaultValue="0" required disabled={busy || !canManageMap} /></label><label>크기<input name="size" type="number" min="0.25" step="0.25" defaultValue="1" required disabled={busy || !canManageMap} /></label></div>
           {message && <p className="form-message" role="status">{message}</p>}
@@ -1002,8 +1002,9 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       {!loading && !error && !selected && <p className="map-notice">등록된 룸 맵이 없습니다.</p>}
     </div>
     <div className="scene-tabs" aria-label="룸 맵 목록" ref={sceneTabs}>
-      {maps.map((map, index) => <button className={map.id === selectedId ? "scene-active" : ""} type="button" key={map.id} onClick={() => setSelectedId(map.id)} onFocus={(event) => revealMapTab(event.currentTarget)}>
-        <span className="scene-thumbnail">{map.thumbnailUrl ? <img src={map.thumbnailUrl} alt="" /> : "맵"}</span>맵 {index + 1}
+      {maps.map((map) => <button className={map.id === selectedId ? "scene-active" : ""} type="button" key={map.id} aria-label={`${labels.get(map.asset_id)} · 등록 ${registrationIds.get(map.id)}`} onClick={() => setSelectedId(map.id)} onFocus={(event) => revealMapTab(event.currentTarget)}>
+        <span className="scene-thumbnail" aria-hidden="true"><AssetImage src={map.thumbnailUrl} alt="" /></span>
+        <span className="scene-label" title={`${labels.get(map.asset_id)} · 등록 ${registrationIds.get(map.id)}`}>{labels.get(map.asset_id)} · 등록 {registrationIds.get(map.id)}</span>
       </button>)}
     </div>
     </section>

@@ -46,6 +46,7 @@ function renderMap(role: RoomRole | null, loadedRole = role, checking = false, r
         runInNewContext(source, { exports: toolExports, require });
         return toolExports;
       }
+      if (name === "../assets/asset-picker" || name === "../assets/asset-image") return { __esModule: true, default: () => null };
       if (name === "./map-drawing-shape") return { __esModule: true, default: () => null };
       return require(name.startsWith("./") || name.startsWith("../") ? `${name}.ts` : name);
     },
@@ -295,4 +296,14 @@ test("그림 저장 실패 뒤 재열기·재시도가 가능하고 성공하면
   await new Promise<void>(resolve => setImmediate(resolve));
   assert.doesNotMatch(renderMap("master", "master", false, runtime), /그림을 저장할 수 없습니다/);
   assert.equal((runtime.states![18] as unknown[]).length, 1);
+});
+
+test("같은 자산을 가리키는 탭도 등록 ID로 구분하고 이미지 없는 맵 탭을 유지한다", () => {
+  const runtime: MapRuntime = {};
+  renderMap("master", "master", false, runtime);
+  const first = (runtime.states![0] as Record<string, unknown>[])[0];
+  const ids = ["70707070-aaaa-4000-8000-000000000001", "70707070-aaaa-4000-8000-000000000002"];
+  runtime.states![0] = ids.map(id => ({ ...first, id, mapUrl: undefined }));
+  const html = renderMap("master", "master", false, runtime);
+  for (const id of ids) assert.ok(html.includes(`aria-label="맵 · asset-a · 등록 ${id}"`));
 });

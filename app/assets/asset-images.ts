@@ -13,12 +13,17 @@ export function assetImagePaths(assets: Asset[]) {
   ]).filter((path): path is string => Boolean(path)))];
 }
 
-export function assetLabels(assets: Pick<Asset, "id" | "category">[]) {
-  const ids = [...new Set(assets.map((asset) => asset.id))];
-  const categories = { map: "맵", token: "토큰", item: "아이템", other: "기타" };
-  return new Map(assets.map(({ id, category }) => {
+export function shortIds(values: string[]) {
+  const ids = [...new Set(values)];
+  return new Map(ids.map((id) => {
     let length = 8;
     while (length < id.length && ids.some((other) => other !== id && other.startsWith(id.slice(0, length)))) length++;
-    return [id, `${categories[category]} · ${id.slice(0, length)}`];
+    return [id, id.slice(0, length)];
   }));
+}
+
+export function assetLabels(assets: Pick<Asset, "id" | "category">[]) {
+  const ids = shortIds(assets.map((asset) => asset.id));
+  const categories = { map: "맵", token: "토큰", item: "아이템", other: "기타" };
+  return new Map(assets.map(({ id, category }) => [id, `${categories[category]} · ${ids.get(id)}`]));
 }

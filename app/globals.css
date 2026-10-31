@@ -276,3 +276,11 @@ h1,h2,p { margin-top:0; }
 
 .asset-card strong { overflow-wrap:anywhere; }
 .asset-thumbnail>span,.asset-map-result[role="img"] { padding:10px; color:var(--muted); font-size:11px; text-align:center; }
+
+.asset-picker-preview { display:grid; place-items:center; height:70px; overflow:hidden; background:#171a1c; font-size:11px; color:var(--muted); }
+.asset-picker-preview img { width:100%; height:100%; object-fit:contain; }
+.scene-tabs button { max-width:300px; }
+.scene-thumbnail { flex:none; }
+.scene-thumbnail>span { font-size:0; }
+.scene-thumbnail>span::after { content:"×"; font-size:12px; }
+.scene-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

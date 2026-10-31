@@ -3,11 +3,11 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 
-import type { Asset } from "../assets/asset-images";
+import AssetPicker, { type PickerAsset } from "../assets/asset-picker";
 import { supabase } from "@/lib/supabase/client";
 import { useRoomPermissions } from "./room-permissions";
 
-type MapAsset = Pick<Asset, "id" | "storage_path">;
+type MapAsset = PickerAsset;
 
 export default function MapRegistration({ roomId }: { roomId?: string }) {
   const [assets, setAssets] = useState<MapAsset[]>([]);
@@ -33,7 +33,7 @@ export default function MapRegistration({ roomId }: { roomId?: string }) {
       setError("");
       const { data, error: assetError } = await supabase
         .from("assets")
-        .select("id, storage_path")
+        .select("id, category, storage_path, thumbnail_storage_path")
         .eq("category", "map")
         .eq("owner_id", currentUserId)
         .order("created_at", { ascending: false });
@@ -93,7 +93,7 @@ export default function MapRegistration({ roomId }: { roomId?: string }) {
     {error && <p className="form-error" role="alert">{error}</p>}
     {!loading && isMaster === false && <p className="muted">맵 등록은 마스터만 할 수 있습니다.</p>}
     {!loading && isMaster && (assets.length ? <form onSubmit={register}>
-      <label>맵 자산<select name="assetId" required disabled={busy || !canRegister}>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.storage_path.split("/").at(-1)}</option>)}</select></label>
+      <AssetPicker assets={assets} name="assetId" label="맵 자산" disabled={busy || !canRegister} />
       <div className="map-grid-inputs"><label>셀 크기<input name="gridCellSize" type="number" min="1" inputMode="numeric" placeholder="선택" disabled={busy || !canRegister} /></label><label>X 오프셋<input name="gridOffsetX" type="number" inputMode="numeric" placeholder="선택" disabled={busy || !canRegister} /></label><label>Y 오프셋<input name="gridOffsetY" type="number" inputMode="numeric" placeholder="선택" disabled={busy || !canRegister} /></label></div>
       {message && <p className="form-message" role="status">{message}</p>}
       <button className="primary-button" type="submit" disabled={busy || !canRegister}>{busy ? "등록 중…" : "맵 등록"}</button>
