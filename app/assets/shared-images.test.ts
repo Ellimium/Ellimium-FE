@@ -29,7 +29,8 @@ test("공유 이미지는 캐시 없이 사용자 인증으로 조회하고 Blob
 test("공유 해제 후 조회가 거부되면 이미지 URL을 생성하지 않는다", async (t) => {
   t.mock.method(globalThis, "fetch", async () => new Response("denied", { status: 403 }));
   const create = t.mock.method(URL, "createObjectURL");
-  await assert.rejects(sharedImageUrls(["owner/private.png"], "token", new AbortController().signal), /접근/);
+  const urls = await sharedImageUrls(["owner/private.png"], "token", new AbortController().signal);
+  assert.equal(urls.size, 0);
   assert.equal(create.mock.callCount(), 0);
 });
 
@@ -42,4 +43,16 @@ test("룸 전환으로 취소된 응답은 Blob URL로 남지 않는다", async 
   const create = t.mock.method(URL, "createObjectURL");
   await assert.rejects(sharedImageUrls(["owner/late.png"], "token", controller.signal), { name: "AbortError" });
   assert.equal(create.mock.callCount(), 0);
+});
+
+
+test("공유 이미지 하나의 접근 거부·통신 실패가 다른 이미지 표시를 막지 않는다", async (t) => {
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.endsWith("denied.png")) return new Response("denied", { status: 403 });
+    if (url.endsWith("offline.png")) throw new TypeError("network failure");
+    return new Response(new Blob(["image"]));
+  });
+  const urls = await sharedImageUrls(["owner/denied.png", "owner/ok.png", "owner/offline.png"], "token", new AbortController().signal);
+  assert.deepEqual([...urls.keys()], ["owner/ok.png"]);
+  releaseSharedImages(urls);
 });
