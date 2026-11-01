@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
 import { ROOM_ACCESS_ENDED_MESSAGE } from "./room/room-access";
@@ -24,21 +24,40 @@ function Lobby() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const request = useRef<AbortController | null>(null);
+
+  const loadRooms = useCallback(async () => {
+    if (request.current) return;
+    const current = new AbortController();
+    request.current = current;
+    setLoading(true);
+
+    try {
+      const { data, error: roomsError } = await supabase.from("rooms")
+        .select("id, name, description, game_system")
+        .order("created_at", { ascending: false }).abortSignal(current.signal);
+      if (current.signal.aborted) return;
+      if (roomsError) throw roomsError;
+      setRooms(data ?? []);
+      setError("");
+    } catch {
+      if (!current.signal.aborted) setError("캠페인 목록을 불러오지 못했습니다.");
+    } finally {
+      if (!current.signal.aborted) {
+        request.current = null;
+        setLoading(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     setAccessEnded(new URLSearchParams(window.location.search).get("roomAccess") === "ended");
-    let active = true;
-
-    supabase.from("rooms").select("id, name, description, game_system").order("created_at", { ascending: false })
-      .then(({ data, error: roomsError }) => {
-        if (!active) return;
-        if (roomsError) setError("캠페인 목록을 불러오지 못했습니다.");
-        else setRooms(data ?? []);
-        setLoading(false);
-      });
-
-    return () => { active = false; };
-  }, []);
+    void loadRooms();
+    return () => {
+      request.current?.abort();
+      request.current = null;
+    };
+  }, [loadRooms]);
 
   return (
     <main className="lobby-shell">
@@ -61,8 +80,11 @@ function Lobby() {
       </section>
       {accessEnded && <p className="lobby-state form-error" role="alert">{ROOM_ACCESS_ENDED_MESSAGE}</p>}
       <section className="campaign-grid" aria-label="캠페인 목록" aria-busy={loading}>
-        {loading && <p className="lobby-state muted">캠페인을 불러오는 중…</p>}
-        {!loading && error && <p className="lobby-state form-error" role="alert">{error}</p>}
+        {loading && <p className="lobby-state muted" role="status">캠페인을 불러오는 중…</p>}
+        {error && <div className="lobby-state">
+          <p className="form-error" role="alert">{error}</p>
+          <button className="secondary-button" type="button" disabled={loading} onClick={() => void loadRooms()}>다시 불러오기</button>
+        </div>}
         {!loading && !error && rooms.length === 0 && <p className="lobby-state muted">참여 중인 캠페인이 없습니다.</p>}
         {!loading && !error && rooms.map((room) => <article className="campaign-card" key={room.id}>
           <div className="card-art ruins-art"><span>참여 중</span></div>
