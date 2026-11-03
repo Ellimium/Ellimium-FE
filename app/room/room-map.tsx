@@ -73,6 +73,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const { role, currentUserId, members, checking, error: permissionError, canUse, loading: permissionLoading } = useRoomPermissions();
   const canViewMap = !permissionLoading && canUse("map_view");
   const [maps, setMaps] = useState<DisplayMap[]>([]);
+  const hasMaps = maps.length > 0;
   const [tokens, setTokens] = useState<DisplayToken[]>([]);
   const [tokenAssets, setTokenAssets] = useState<TokenAsset[]>([]);
   const [players, setPlayers] = useState<PlayerOption[]>([]);
@@ -302,10 +303,10 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }, [players, visibilityTarget]);
 
   useEffect(() => {
-    if (!roomId || !canViewMap || !maps.length) return;
+    if (!roomId || !currentUserId || !canViewMap || !hasMaps) return;
 
     const movement = createTokenMovement({
-      userId: currentUserId ?? "",
+      userId: currentUserId,
       send: async (id, position) => {
         const { error } = await supabase.rpc("broadcast_token_movement", {
           target_room_id: roomId, target_token_id: id, position_x: position.x, position_y: position.y,
@@ -349,7 +350,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
       if (movementRef.current === movement) movementRef.current = null;
       void supabase.removeChannel(channel);
     };
-  }, [canViewMap, currentUserId, maps, roomId]);
+  }, [canViewMap, currentUserId, hasMaps, roomId]);
 
   useEffect(() => {
     if (!roomId || !canViewMap || !maps.length) {

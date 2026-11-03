@@ -14,6 +14,8 @@ const settleMovement = async () => { for (let i = 0; i < 50; i++) await Promise.
 const require = createRequire(import.meta.url);
 type Effect = { callback: () => void; deps: unknown[] };
 type MapRuntime = {
+  roomId?: string;
+  userId?: string | null;
   states?: unknown[];
   refs?: { current: unknown }[];
   effects?: Effect[];
@@ -39,7 +41,7 @@ function renderMap(role: RoomRole | null, loadedRole = role, checking = false, r
         return [states[i], (value: unknown) => { states[i] = typeof value === "function" ? value(states[i]) : value; }];
       }, useEffect: (callback: () => void, deps: unknown[]) => runtime.effects?.push({ callback, deps }),
       useRef: (value: unknown) => runtime.refs ? (runtime.refs[refIndex++] ??= { current: value }) : { current: value } };
-      if (name === "./room-permissions") return { useRoomPermissions: () => ({ role, currentUserId: "me", members: [], checking, error: runtime.error ?? "", loading: false,
+      if (name === "./room-permissions") return { useRoomPermissions: () => ({ role, currentUserId: runtime.userId === undefined ? "me" : runtime.userId, members: [], checking, error: runtime.error ?? "", loading: false,
         canUse: runtime.canUse ?? ((feature: string) => !checking || feature === "map_view") }) };
       if (name === "@/lib/supabase/client") return { supabase: runtime.client ?? {} };
       if (name === "./room-tools") {
@@ -53,7 +55,7 @@ function renderMap(role: RoomRole | null, loadedRole = role, checking = false, r
       return require(name.startsWith("./") || name.startsWith("../") ? `${name}.ts` : name);
     },
   });
-  runtime.tree = exports.default!({ roomId: "room-a" }) as React.ReactElement;
+  runtime.tree = exports.default!({ roomId: runtime.roomId ?? "room-a" }) as React.ReactElement;
   return renderToStaticMarkup(runtime.tree);
 }
 
@@ -412,3 +414,104 @@ test("실제 맵 컴포넌트가 private 채널·RPC·확정 갱신을 연결하
   assert.deepEqual(db, { x: 1, y: 1 });
   dispose();
 });
+
+
+function movementLifecycleHarness() {
+  let db = { x: 0, y: 0 };
+  let sendGate: Promise<void> | undefined;
+  let saveGate: Promise<void> | undefined;
+  let subscriptions = 0; let removals = 0;
+  const saves: number[] = [];
+  const runtime: MapRuntime = { refs: [], client: {
+    rpc: async () => { await sendGate; return { error: null }; },
+    from: () => {
+      let update: typeof db | undefined;
+      const query = {
+        update: (position: typeof db) => { update = position; return query; },
+        select: () => query, eq: () => query,
+        maybeSingle: async () => {
+          if (update) { saves.push(update.x); await saveGate; db = { ...update }; }
+          return { data: { id: "token-a", ...db }, error: null };
+        },
+      };
+      return query;
+    },
+    channel: () => {
+      subscriptions++;
+      const channel = { on: () => channel, subscribe: () => channel };
+      return channel;
+    },
+    removeChannel: async () => { removals++; },
+  } };
+  let previous: Effect | undefined;
+  let cleanup: (() => void) | undefined;
+  const render = () => {
+    runtime.effects = [];
+    renderMap("master", "master", false, runtime);
+    const next = runtime.effects!.find((effect) => effect.callback.toString().includes(":token-movements"))!;
+    if (!previous || next.deps.some((dep, i) => !Object.is(dep, previous!.deps[i]))) {
+      cleanup?.();
+      cleanup = (next.callback as () => (() => void) | undefined)();
+    }
+    previous = next;
+  };
+  render();
+  return {
+    runtime, render, saves,
+    movement: () => runtime.refs![0].current as ReturnType<typeof createTokenMovement>,
+    replaceMaps: (change: (maps: Record<string, unknown>[]) => Record<string, unknown>[]) => {
+      runtime.states![0] = change(runtime.states![0] as Record<string, unknown>[]); render();
+    },
+    holdSend: (gate: Promise<void>) => { sendGate = gate; },
+    holdSave: (gate: Promise<void>) => { saveGate = gate; },
+    dispose: () => { cleanup?.(); cleanup = undefined; },
+    get db() { return db; }, get subscriptions() { return subscriptions; }, get removals() { return removals; },
+  };
+}
+function movementGate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+for (const scenario of ["Fog 변경", "맵 등록", "참가자 변경 후 맵 재조회"]) {
+  test(`${scenario} 때 실제 effect 수명을 유지해 대기 중인 완료 이동을 저장한다`, async (t) => {
+    const h = movementLifecycleHarness(); const gate = movementGate(); h.holdSend(gate.promise);
+    t.after(() => { gate.resolve(); h.dispose(); });
+    const movement = h.movement();
+    movement.preview("token-a", { x: 1, y: 1 }); await settleMovement();
+    const completed = movement.finish("token-a", { x: 2, y: 2 });
+    h.replaceMaps((maps) => scenario === "맵 등록" ? [...maps, { ...maps[0], id: "map-b", asset_id: "asset-b" }] : maps.map((map) => ({ ...map, ...(scenario === "Fog 변경" ? { fog_enabled: true } : {}) })));
+    gate.resolve(); await completed;
+    assert.deepEqual(h.saves, [2]); assert.deepEqual(h.db, { x: 2, y: 2 });
+    assert.equal(h.movement(), movement);
+    assert.equal(h.subscriptions, 1); assert.equal(h.removals, 0);
+  });
+}
+
+test("맵 갱신 전 실행 중인 저장보다 갱신 후 저장을 먼저 실행하지 않는다", async (t) => {
+  const h = movementLifecycleHarness(); const gate = movementGate(); h.holdSave(gate.promise);
+  t.after(() => { gate.resolve(); h.dispose(); });
+  const first = h.movement().finish("token-a", { x: 1, y: 1 }); await settleMovement();
+  h.replaceMaps((maps) => maps.map((map) => ({ ...map, fog_enabled: true })));
+  const second = h.movement().finish("token-a", { x: 2, y: 2 }); await settleMovement();
+  assert.deepEqual(h.saves, [1]);
+  gate.resolve(); await Promise.all([first, second]);
+  assert.deepEqual(h.saves, [1, 2]); assert.deepEqual(h.db, { x: 2, y: 2 });
+});
+
+for (const scenario of ["룸 변경", "사용자 변경", "열람 권한 상실", "언마운트"]) {
+  test(`${scenario} 때는 실제 effect를 정리하고 이전 연결의 대기 요청을 폐기한다`, async (t) => {
+    const h = movementLifecycleHarness(); const gate = movementGate(); h.holdSend(gate.promise);
+    t.after(() => { gate.resolve(); h.dispose(); });
+    h.movement().preview("token-a", { x: 1, y: 1 }); await settleMovement();
+    const completed = h.movement().finish("token-a", { x: 2, y: 2 });
+    if (scenario === "룸 변경") { h.runtime.roomId = "room-b"; h.render(); }
+    if (scenario === "사용자 변경") { h.runtime.userId = "other-user"; h.render(); }
+    if (scenario === "열람 권한 상실") { h.runtime.canUse = () => false; h.render(); }
+    if (scenario === "언마운트") h.dispose();
+    gate.resolve(); await completed;
+    assert.equal(h.removals, 1); assert.deepEqual(h.saves, []);
+    assert.equal(h.subscriptions, scenario === "룸 변경" || scenario === "사용자 변경" ? 2 : 1);
+  });
+}
