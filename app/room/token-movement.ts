@@ -21,6 +21,7 @@ export function createTokenMovement(options: {
 }) {
   type State = {
     version: number;
+    saveVersion: number;
     readVersion: number;
     local: boolean;
     pending: TokenPosition | null;
@@ -35,7 +36,7 @@ export function createTokenMovement(options: {
   const state = (id: string) => {
     let current = states.get(id);
     if (!current) {
-      current = { version: 0, readVersion: 0, local: false, pending: null, draining: false, tail: Promise.resolve(), messageTime: -Infinity, commitTime: -Infinity };
+      current = { version: 0, saveVersion: 0, readVersion: 0, local: false, pending: null, draining: false, tail: Promise.resolve(), messageTime: -Infinity, commitTime: -Infinity };
       states.set(id, current);
     }
     return current;
@@ -99,12 +100,14 @@ export function createTokenMovement(options: {
   const finish = (id: string, position: TokenPosition) => {
     const s = state(id);
     const version = ++s.version;
+    const saveVersion = ++s.saveVersion;
     s.readVersion++;
     s.local = true;
     s.pending = null;
     apply(id, position);
     return enqueue(s, async () => {
-      if (disposed || version !== s.version) return;
+      // Only a newer completed move can supersede a queued save, not a preview/cancel.
+      if (disposed || saveVersion !== s.saveVersion) return;
       try {
         await options.save(id, position);
         // A failed preview must never roll back a successful confirmed save.
@@ -112,8 +115,8 @@ export function createTokenMovement(options: {
       } catch {
         if (version === s.version) {
           s.local = false;
-          report("토큰의 최종 위치를 저장할 수 없습니다.");
         }
+        if (saveVersion === s.saveVersion) report("토큰의 최종 위치를 저장할 수 없습니다.");
       }
       if (version === s.version) await recover(id);
     });

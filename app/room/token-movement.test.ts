@@ -14,6 +14,7 @@ function harness() {
   let failSend = false;
   let failSave = false;
   let sendGate: Promise<void> | undefined;
+  let saveGate: Promise<void> | undefined;
   let readGate: Promise<void> | undefined;
   const calls: string[] = [];
   const errors: string[] = [];
@@ -26,6 +27,7 @@ function harness() {
     },
     save: async (_id, position) => {
       calls.push(`save:${position.x}`);
+      await saveGate;
       if (failSave) throw new Error("update denied");
       db = { ...position };
     },
@@ -40,6 +42,7 @@ function harness() {
     dbPosition: (position: TokenPosition) => { db = position; },
     failSend: () => { failSend = true; }, failSave: () => { failSave = true; },
     holdSend: (promise: Promise<void>) => { sendGate = promise; },
+    holdSave: (promise: Promise<void>) => { saveGate = promise; },
     holdRead: (promise: Promise<void>) => { readGate = promise; },
   };
 }
@@ -146,4 +149,54 @@ test("기존 연결의 늦은 권한 오류는 새 제스처나 종료된 화면
   });
   sync.preview("token", { x: 1, y: 1 }); await settle();
   sync.dispose(); gate.resolve(); await settle(); assert.equal(denied, 0);
+});
+
+test("새 드래그를 취소해도 RPC 뒤에 대기 중인 직전 완료 이동은 저장한다", async () => {
+  const h = harness(); const gate = deferred(); h.holdSend(gate.promise);
+  h.sync.preview("token", { x: 2, y: 2 }); await settle();
+  const completed = h.sync.finish("token", { x: 3, y: 3 });
+  h.sync.preview("token", { x: 4, y: 4 });
+  const cancelled = h.sync.cancel("token");
+  gate.resolve(); await Promise.all([completed, cancelled]);
+  assert.deepEqual(h.calls, ["send:2", "save:3", "send:3"]);
+  assert.deepEqual(h.db, { x: 3, y: 3 });
+  assert.deepEqual(h.shown, { x: 3, y: 3 }); h.sync.dispose();
+});
+
+test("새 드래그 중 직전 완료 이동을 저장해도 새 미리보기는 유지한다", async () => {
+  const h = harness(); const gate = deferred(); h.holdSend(gate.promise);
+  h.sync.preview("token", { x: 2, y: 2 }); await settle();
+  const completed = h.sync.finish("token", { x: 3, y: 3 });
+  h.sync.preview("token", { x: 4, y: 4 });
+  gate.resolve(); await completed;
+  assert.deepEqual(h.db, { x: 3, y: 3 });
+  assert.deepEqual(h.shown, { x: 4, y: 4 });
+  await h.sync.finish("token", { x: 5, y: 5 });
+  assert.deepEqual(h.calls.filter((call) => call.startsWith("save:")), ["save:3", "save:5"]);
+  assert.deepEqual(h.db, { x: 5, y: 5 }); h.sync.dispose();
+});
+
+
+test("이미 실행 중인 확정 저장 뒤에 다음 확정 저장을 순서대로 실행한다", async () => {
+  const h = harness(); const gate = deferred(); h.holdSave(gate.promise);
+  const first = h.sync.finish("token", { x: 2, y: 2 }); await settle();
+  const second = h.sync.finish("token", { x: 3, y: 3 }); await settle();
+  assert.deepEqual(h.calls, ["save:2"]);
+  assert.deepEqual(h.shown, { x: 3, y: 3 });
+  gate.resolve(); await Promise.all([first, second]);
+  assert.deepEqual(h.calls, ["save:2", "save:3"]);
+  assert.deepEqual(h.db, { x: 3, y: 3 });
+  assert.deepEqual(h.shown, { x: 3, y: 3 }); h.sync.dispose();
+});
+
+test("직전 완료 이동의 저장 실패는 알리되 새 드래그의 미리보기를 되돌리지 않는다", async () => {
+  const h = harness(); const gate = deferred(); h.holdSend(gate.promise); h.failSave();
+  h.sync.preview("token", { x: 2, y: 2 }); await settle();
+  const completed = h.sync.finish("token", { x: 3, y: 3 });
+  h.sync.preview("token", { x: 4, y: 4 });
+  gate.resolve(); await completed;
+  assert.ok(h.calls.includes("save:3"));
+  assert.ok(h.errors.some((message) => message.includes("최종 위치")));
+  assert.deepEqual(h.shown, { x: 4, y: 4 });
+  assert.deepEqual(h.db, { x: 1, y: 2 }); h.sync.dispose();
 });
