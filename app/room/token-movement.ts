@@ -128,15 +128,31 @@ export function createTokenMovement(options: {
     s.pending = null;
     s.local = false;
     return enqueue(s, async () => {
-      if (disposed || version !== s.version) return;
-      try {
-        const position = await options.read(id);
-        if (disposed || version !== s.version || !position) return;
-        apply(id, position);
-        try { await options.send(id, position); }
-        catch { report("토큰의 복구 위치를 공유할 수 없습니다."); }
-      } catch { report("토큰의 확정 위치를 다시 불러올 수 없습니다."); }
-      if (version === s.version) await recover(id);
+      while (!disposed && version === s.version) {
+        const readVersion = ++s.readVersion;
+        try {
+          const position = await options.read(id);
+          if (disposed || version !== s.version) return;
+          if (readVersion !== s.readVersion) {
+            // Keep a newer peer preview; its idle timer will recover the DB position.
+            if (s.messageTime > s.commitTime) return;
+            continue;
+          }
+          if (!position) return;
+          apply(id, position);
+          try { await options.send(id, position); }
+          catch { report("토큰의 복구 위치를 공유할 수 없습니다."); }
+        } catch {
+          if (disposed || version !== s.version) return;
+          if (readVersion !== s.readVersion) {
+            if (s.messageTime > s.commitTime) return;
+            continue;
+          }
+          report("토큰의 확정 위치를 다시 불러올 수 없습니다.");
+        }
+        if (version === s.version) await recover(id);
+        return;
+      }
     });
   };
   return {

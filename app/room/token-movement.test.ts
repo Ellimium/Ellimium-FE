@@ -8,7 +8,7 @@ function deferred() {
   const promise = new Promise<void>((done) => { resolve = done; });
   return { promise, resolve };
 }
-function harness() {
+function harness(onSend?: (position: TokenPosition) => void) {
   let db = { x: 1, y: 2 };
   let shown = { ...db };
   let failSend = false;
@@ -18,12 +18,14 @@ function harness() {
   let readGate: Promise<void> | undefined;
   const calls: string[] = [];
   const errors: string[] = [];
+  const applied: TokenPosition[] = [];
   const sync = createTokenMovement({
     userId: "me",
     send: async (_id, position) => {
       calls.push(`send:${position.x}`);
       await sendGate;
       if (failSend) throw new Error("permission revoked");
+      onSend?.(position);
     },
     save: async (_id, position) => {
       calls.push(`save:${position.x}`);
@@ -32,12 +34,12 @@ function harness() {
       db = { ...position };
     },
     read: async () => { const snapshot = { ...db }; await readGate; return snapshot; },
-    apply: (_id, position) => { shown = { x: position.x, y: position.y }; },
+    apply: (_id, position) => { shown = { x: position.x, y: position.y }; applied.push({ ...shown }); },
     error: (message) => errors.push(message),
   });
   const event = (x: number, fraction: string, sender = "peer") => sync.receive({ token_id: "token", sender_id: sender, x, y: x, sent_at: `2026-11-03T00:00:00.${fraction}Z` });
   return {
-    sync, event, calls, errors,
+    sync, event, calls, errors, applied,
     get shown() { return shown; }, get db() { return db; },
     dbPosition: (position: TokenPosition) => { db = position; },
     failSend: () => { failSend = true; }, failSave: () => { failSave = true; },
@@ -199,4 +201,82 @@ test("직전 완료 이동의 저장 실패는 알리되 새 드래그의 미리
   assert.ok(h.errors.some((message) => message.includes("최종 위치")));
   assert.deepEqual(h.shown, { x: 4, y: 4 });
   assert.deepEqual(h.db, { x: 1, y: 2 }); h.sync.dispose();
+});
+
+
+for (const failRestore of [false, true]) {
+  test(`지연된 취소 조회 중 마스터가 확정하면 이전 좌표를 적용·송신하지 않는다 (복구 거부=${failRestore})`, async () => {
+    const receiver = harness();
+    const sender = harness((position) => receiver.sync.receive({ token_id: "token", sender_id: "me", ...position, sent_at: "2026-11-03T00:00:00.300000Z" }));
+    const gate = deferred(); sender.holdRead(gate.promise);
+    if (failRestore) sender.failSend();
+    const cancelled = sender.sync.cancel("token"); await settle();
+    for (const h of [sender, receiver]) {
+      h.dbPosition({ x: 20, y: 20 });
+      h.sync.confirmed("token", { x: 20, y: 20 }, "2026-11-03T00:00:00.200000Z");
+    }
+    gate.resolve(); await cancelled;
+    assert.deepEqual(sender.calls, ["send:20"]);
+    for (const h of [sender, receiver]) {
+      assert.deepEqual(h.shown, { x: 20, y: 20 });
+      assert.ok(h.applied.every((position) => position.x === 20));
+      h.sync.dispose();
+    }
+    assert.equal(sender.errors.length, failRestore ? 1 : 0);
+  });
+}
+
+test("취소 재조회 도중 확정 갱신이 다시 오면 그 조회도 폐기하고 최신 위치를 읽는다", async () => {
+  const h = harness(); const first = deferred(); const second = deferred(); h.holdRead(first.promise);
+  const cancelled = h.sync.cancel("token"); await settle();
+  h.dbPosition({ x: 20, y: 20 }); h.sync.confirmed("token", { x: 20, y: 20 }, "2026-11-03T00:00:00.200000Z");
+  h.holdRead(second.promise); first.resolve(); await settle();
+  h.dbPosition({ x: 30, y: 30 }); h.sync.confirmed("token", { x: 30, y: 30 }, "2026-11-03T00:00:00.300000Z");
+  h.holdRead(Promise.resolve()); second.resolve(); await cancelled;
+  assert.deepEqual(h.calls, ["send:30"]); assert.deepEqual(h.shown, { x: 30, y: 30 });
+  assert.deepEqual(h.applied.map((p) => p.x), [20, 30, 30, 30]); h.sync.dispose();
+});
+
+test("취소 조회 중 새 로컬 드래그를 시작하면 취소 결과를 적용·방송하지 않는다", async () => {
+  const h = harness(); const gate = deferred(); h.holdRead(gate.promise);
+  const cancelled = h.sync.cancel("token"); await settle();
+  h.sync.preview("token", { x: 9, y: 9 }); gate.resolve(); await cancelled; await settle();
+  assert.deepEqual(h.calls, ["send:9"]); assert.deepEqual(h.shown, { x: 9, y: 9 }); h.sync.dispose();
+});
+
+test("취소 조회 중 새 확정 이동을 요청하면 이전 취소 방송 없이 새 위치를 저장한다", async () => {
+  const h = harness(); const gate = deferred(); h.holdRead(gate.promise);
+  const cancelled = h.sync.cancel("token"); await settle();
+  const completed = h.sync.finish("token", { x: 9, y: 9 }); gate.resolve(); await Promise.all([cancelled, completed]);
+  assert.deepEqual(h.calls, ["save:9"]); assert.deepEqual(h.db, { x: 9, y: 9 }); h.sync.dispose();
+});
+
+test("취소 조회 중 새 상대 미리보기가 오면 이를 이전 DB 좌표로 덮어쓰지 않는다", async () => {
+  const h = harness(); const gate = deferred(); h.holdRead(gate.promise);
+  const cancelled = h.sync.cancel("token"); await settle();
+  h.event(9, "300000"); gate.resolve(); await cancelled;
+  assert.deepEqual(h.calls, []); assert.deepEqual(h.shown, { x: 9, y: 9 }); h.sync.dispose();
+});
+
+test("취소 조회 중 연결이 정리되면 적용·복구 송신·재조회를 중단한다", async () => {
+  const h = harness(); const gate = deferred(); h.holdRead(gate.promise);
+  const cancelled = h.sync.cancel("token"); await settle(); h.sync.dispose(); gate.resolve(); await cancelled;
+  assert.deepEqual(h.calls, []); assert.deepEqual(h.applied, []);
+});
+
+test("취소 조회의 지연된 실패가 최신 확정 갱신을 덮지 않고 새 조회로 복구한다", async () => {
+  const h = harness(); const gate = Promise.withResolvers<void>(); h.holdRead(gate.promise);
+  const cancelled = h.sync.cancel("token"); await settle();
+  h.dbPosition({ x: 20, y: 20 }); h.sync.confirmed("token", { x: 20, y: 20 }, "2026-11-03T00:00:00.200000Z");
+  h.holdRead(Promise.resolve()); gate.reject(new Error("obsolete read failure")); await cancelled;
+  assert.deepEqual(h.calls, ["send:20"]); assert.deepEqual(h.errors, []);
+  assert.ok(h.applied.every((position) => position.x === 20)); h.sync.dispose();
+});
+
+test("취소 조회의 지연된 실패 후에도 새 상대 미리보기를 이전 DB 좌표로 되돌리지 않는다", async () => {
+  const h = harness(); const gate = Promise.withResolvers<void>(); h.holdRead(gate.promise);
+  const cancelled = h.sync.cancel("token"); await settle(); h.event(9, "300000");
+  h.holdRead(Promise.resolve()); gate.reject(new Error("obsolete read failure")); await cancelled;
+  assert.deepEqual(h.calls, []); assert.deepEqual(h.errors, []);
+  assert.deepEqual(h.shown, { x: 9, y: 9 }); h.sync.dispose();
 });
