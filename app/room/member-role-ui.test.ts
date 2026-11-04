@@ -8,10 +8,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ts from "typescript";
 import type { RoomRole } from "./room-permission.ts";
 import { resolveRoomFeatureState } from "./room-permission.ts";
+import { createTokenMovement } from "./token-movement.ts";
+const settleMovement = async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); };
 
 const require = createRequire(import.meta.url);
 type Effect = { callback: () => void; deps: unknown[] };
 type MapRuntime = {
+  roomId?: string;
+  userId?: string | null;
   states?: unknown[];
   refs?: { current: unknown }[];
   effects?: Effect[];
@@ -37,7 +41,7 @@ function renderMap(role: RoomRole | null, loadedRole = role, checking = false, r
         return [states[i], (value: unknown) => { states[i] = typeof value === "function" ? value(states[i]) : value; }];
       }, useEffect: (callback: () => void, deps: unknown[]) => runtime.effects?.push({ callback, deps }),
       useRef: (value: unknown) => runtime.refs ? (runtime.refs[refIndex++] ??= { current: value }) : { current: value } };
-      if (name === "./room-permissions") return { useRoomPermissions: () => ({ role, currentUserId: "me", members: [], checking, error: runtime.error ?? "", loading: false,
+      if (name === "./room-permissions") return { useRoomPermissions: () => ({ role, currentUserId: runtime.userId === undefined ? "me" : runtime.userId, members: [], checking, error: runtime.error ?? "", loading: false,
         canUse: runtime.canUse ?? ((feature: string) => !checking || feature === "map_view") }) };
       if (name === "@/lib/supabase/client") return { supabase: runtime.client ?? {} };
       if (name === "./room-tools") {
@@ -51,7 +55,7 @@ function renderMap(role: RoomRole | null, loadedRole = role, checking = false, r
       return require(name.startsWith("./") || name.startsWith("../") ? `${name}.ts` : name);
     },
   });
-  runtime.tree = exports.default!({ roomId: "room-a" }) as React.ReactElement;
+  runtime.tree = exports.default!({ roomId: runtime.roomId ?? "room-a" }) as React.ReactElement;
   return renderToStaticMarkup(runtime.tree);
 }
 
@@ -86,7 +90,16 @@ function dragHarness() {
     { pointerId: 1, points }, "", false];
   const sent: unknown[] = [];
   const saved: unknown[] = [];
-  const runtime: MapRuntime = { states, refs: [{ current: { send: (payload: unknown) => { sent.push(payload); } } }],
+  let confirmed = { x: 2, y: 2 };
+  const movement = createTokenMovement({
+    userId: "me",
+    send: async (_id, position) => { sent.push({ x: position.x, y: position.y }); },
+    save: async (_id, position) => { saved.push(position); confirmed = { ...position }; },
+    read: async () => confirmed,
+    apply: (id, position) => { states[1] = (states[1] as { id: string }[]).map((token) => token.id === id ? { ...token, ...position } : token); },
+    error: () => {},
+  });
+  const runtime: MapRuntime = { states, refs: [{ current: movement }],
     client: { from: () => ({ update: (position: unknown) => {
       saved.push(position);
       return { eq: () => ({ select: () => ({ maybeSingle: async () => ({ data: { id: "token-a" }, error: null }) }) }) };
@@ -125,9 +138,9 @@ test("주기적 재조회와 복구는 진행 중인 토큰·그림·Fog 드래�
   }
 });
 
-test("실제 권한 상실·조회 실패는 드래그를 취소하고 토큰 원위치를 방송한다", () => {
+test("실제 권한 상실·조회 실패는 드래그를 취소하고 DB 확정 위치를 서버 경로로 공유한다", async () => {
   for (const scenario of [{ role: "spectator" as const, error: "", denied: false }, { role: null, error: "조회 실패", denied: false }]) {
-    const h = dragHarness(); h.render(true); h.render(false, scenario.role, scenario.error, scenario.denied);
+    const h = dragHarness(); h.render(true); h.render(false, scenario.role, scenario.error, scenario.denied); await settleMovement();
     assert.equal(h.states[11], null); assert.equal(h.states[15], null); assert.equal(h.states[24], null);
     assert.deepEqual((h.states[1] as { x: number; y: number }[]).map(({ x, y }) => ({ x, y })), [{ x: 2, y: 2 }]);
     assert.ok(h.sent.some((message) => JSON.stringify(message).includes('"x":2,"y":2')));
@@ -145,23 +158,23 @@ function pointerUp(tree: React.ReactNode, className: string) {
   find(tree)!.props.onPointerUp({ pointerId: 1, clientX: 200, clientY: 200, currentTarget: { ...svg, ownerSVGElement: svg } });
 }
 
-test("조회 중 놓은 토큰은 권한 확인 성공 후 한 번 저장하고 강등되면 저장하지 않는다", () => {
+test("조회 중 놓은 토큰은 권한 확인 성공 후 한 번 저장하고 강등되면 저장하지 않는다", async () => {
   for (const role of ["master", "spectator"] as const) {
     const h = dragHarness(); h.render(true);
     pointerUp(h.runtime.tree, "room-map-canvas");
     assert.deepEqual(h.saved, []);
-    h.render(false, role); h.render(false, role);
+    h.render(false, role); h.render(false, role); await settleMovement();
     assert.equal(h.saved.length, role === "master" ? 1 : 0);
     assert.equal(h.states[11], null);
   }
 });
 
-test("조회 중 종료한 그림·Fog는 재확인 뒤 저장하며 강등 시 폐기한다", () => {
+test("조회 중 종료한 그림·Fog는 재확인 뒤 저장하며 강등 시 폐기한다", async () => {
   for (const type of ["drawing", "fog"]) for (const role of ["master", "spectator"] as const) {
     const h = dragHarness(); h.states[16] = type === "fog"; h.render(true);
     pointerUp(h.runtime.tree, `${type}-interaction`);
     assert.deepEqual(h.saved, []);
-    h.render(false, role); h.render(false, role);
+    h.render(false, role); h.render(false, role); await settleMovement();
     assert.equal(h.saved.length, role === "master" ? 1 : 0);
     assert.equal(h.states[type === "drawing" ? 24 : 15], null);
   }
@@ -232,7 +245,7 @@ test("레일과 기존 summary에서 편집을 전환하고 닫으면 토큰 조
   assert.match(html, /role="button" tabindex="0"/);
 });
 
-test("그리기 종료 후 토큰의 방향키 이동과 좌표 저장을 유지한다", () => {
+test("그리기 종료 후 토큰의 방향키 이동과 좌표 저장을 유지한다", async () => {
   const h = dragHarness();
   h.states[11] = null; h.states[15] = null; h.states[24] = null;
   h.states[16] = false; h.states[23] = false;
@@ -240,7 +253,7 @@ test("그리기 종료 후 토큰의 방향키 이동과 좌표 저장을 유지
   const token = element(h.runtime.tree, (node) => node.props.role === "button")!;
   let prevented = false;
   (token.props.onKeyDown as (event: { key: string; preventDefault: () => void }) => void)({ key: "ArrowRight", preventDefault() { prevented = true; } });
-  assert.equal(prevented, true);
+  assert.equal(prevented, true); await settleMovement();
   assert.deepEqual(JSON.parse(JSON.stringify(h.saved)), [{ x: 5, y: 4 }]);
 });
 
@@ -352,3 +365,153 @@ test("정상 자산의 서명 URL 갱신은 진행 중인 토큰·그림·시야
   assert.deepEqual([h.states[11], h.states[15], h.states[24]], before);
   assert.deepEqual(h.sent, []); assert.deepEqual(h.saved, []);
 });
+
+test("포인터 취소는 최종 저장 없이 DB 확정 위치 복구를 요청한다", async () => {
+  const h = dragHarness();
+  const canvas = element(h.runtime.tree, (node) => node.props.className === "room-map-canvas")!;
+  (canvas.props.onPointerCancel as (event: unknown) => void)({ pointerId: 1, currentTarget: { hasPointerCapture: () => false } });
+  await settleMovement();
+  assert.equal(h.states[11], null);
+  assert.deepEqual(h.saved, []);
+  assert.ok(h.sent.some((payload) => JSON.stringify(payload) === '{"x":2,"y":2}'));
+});
+
+test("실제 맵 컴포넌트가 private 채널·RPC·확정 갱신을 연결하고 직접 송신하지 않는다", async () => {
+  const calls: { name: string; args: Record<string, unknown> }[] = [];
+  const callbacks: Record<string, (event: Record<string, unknown>) => void> = {};
+  let topic = ""; let options: unknown;
+  let db = { x: 0, y: 0 };
+  const channel = {
+    on: (event: string, _filter: unknown, callback: (event: Record<string, unknown>) => void) => { callbacks[event] = callback; return channel; },
+    subscribe: () => channel,
+  };
+  const query = {
+    update: (position: typeof db) => { db = { ...position }; return query; },
+    eq: () => query, select: () => query,
+    maybeSingle: async () => ({ data: { id: "token-a", ...db }, error: null }),
+  };
+  const runtime: MapRuntime = { refs: [], effects: [], client: {
+    channel: (name: string, config: unknown) => { topic = name; options = config; return channel; },
+    removeChannel: async () => {}, from: () => query,
+    rpc: async (name: string, args: Record<string, unknown>) => { calls.push({ name, args }); return { error: null }; },
+  } };
+  renderMap("master", "master", false, runtime);
+  const effect = runtime.effects!.find((effect) => effect.callback.toString().includes(":token-movements"))!;
+  const dispose = (effect.callback as () => () => void)();
+  runtime.states![11] = { tokenId: "token-a", pointerId: 1, offsetX: 0, offsetY: 0, startX: 0, startY: 0 };
+  renderMap("master", "master", false, runtime);
+  const canvas = element(runtime.tree, (node) => node.props.className === "room-map-canvas")!;
+  (canvas.props.onPointerMove as (event: unknown) => void)({ pointerId: 1, clientX: 50, clientY: 50, currentTarget: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } });
+  await settleMovement();
+  assert.equal(topic, "room:room-a:token-movements");
+  assert.deepEqual(JSON.parse(JSON.stringify(options)), { config: { private: true } });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [{ name: "broadcast_token_movement", args: { target_room_id: "room-a", target_token_id: "token-a", position_x: 1, position_y: 1 } }]);
+  (canvas.props.onPointerUp as (event: unknown) => void)({ pointerId: 1, clientX: 50, clientY: 50, currentTarget: { hasPointerCapture: () => false, getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } });
+  await settleMovement();
+  callbacks.postgres_changes({ new: { id: "token-a", x: 4, y: 5 }, commit_timestamp: "2026-11-03T00:00:00.100002Z" });
+  callbacks.broadcast({ payload: { token_id: "token-a", sender_id: "peer", x: 99, y: 99, sent_at: "2026-11-03T00:00:00.100001Z" } });
+  assert.equal((runtime.states![1] as { x: number }[])[0].x, 4);
+  assert.deepEqual(db, { x: 1, y: 1 });
+  dispose();
+});
+
+
+function movementLifecycleHarness() {
+  let db = { x: 0, y: 0 };
+  let sendGate: Promise<void> | undefined;
+  let saveGate: Promise<void> | undefined;
+  let subscriptions = 0; let removals = 0;
+  const saves: number[] = [];
+  const runtime: MapRuntime = { refs: [], client: {
+    rpc: async () => { await sendGate; return { error: null }; },
+    from: () => {
+      let update: typeof db | undefined;
+      const query = {
+        update: (position: typeof db) => { update = position; return query; },
+        select: () => query, eq: () => query,
+        maybeSingle: async () => {
+          if (update) { saves.push(update.x); await saveGate; db = { ...update }; }
+          return { data: { id: "token-a", ...db }, error: null };
+        },
+      };
+      return query;
+    },
+    channel: () => {
+      subscriptions++;
+      const channel = { on: () => channel, subscribe: () => channel };
+      return channel;
+    },
+    removeChannel: async () => { removals++; },
+  } };
+  let previous: Effect | undefined;
+  let cleanup: (() => void) | undefined;
+  const render = () => {
+    runtime.effects = [];
+    renderMap("master", "master", false, runtime);
+    const next = runtime.effects!.find((effect) => effect.callback.toString().includes(":token-movements"))!;
+    if (!previous || next.deps.some((dep, i) => !Object.is(dep, previous!.deps[i]))) {
+      cleanup?.();
+      cleanup = (next.callback as () => (() => void) | undefined)();
+    }
+    previous = next;
+  };
+  render();
+  return {
+    runtime, render, saves,
+    movement: () => runtime.refs![0].current as ReturnType<typeof createTokenMovement>,
+    replaceMaps: (change: (maps: Record<string, unknown>[]) => Record<string, unknown>[]) => {
+      runtime.states![0] = change(runtime.states![0] as Record<string, unknown>[]); render();
+    },
+    holdSend: (gate: Promise<void>) => { sendGate = gate; },
+    holdSave: (gate: Promise<void>) => { saveGate = gate; },
+    dispose: () => { cleanup?.(); cleanup = undefined; },
+    get db() { return db; }, get subscriptions() { return subscriptions; }, get removals() { return removals; },
+  };
+}
+function movementGate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+for (const scenario of ["Fog 변경", "맵 등록", "참가자 변경 후 맵 재조회"]) {
+  test(`${scenario} 때 실제 effect 수명을 유지해 대기 중인 완료 이동을 저장한다`, async (t) => {
+    const h = movementLifecycleHarness(); const gate = movementGate(); h.holdSend(gate.promise);
+    t.after(() => { gate.resolve(); h.dispose(); });
+    const movement = h.movement();
+    movement.preview("token-a", { x: 1, y: 1 }); await settleMovement();
+    const completed = movement.finish("token-a", { x: 2, y: 2 });
+    h.replaceMaps((maps) => scenario === "맵 등록" ? [...maps, { ...maps[0], id: "map-b", asset_id: "asset-b" }] : maps.map((map) => ({ ...map, ...(scenario === "Fog 변경" ? { fog_enabled: true } : {}) })));
+    gate.resolve(); await completed;
+    assert.deepEqual(h.saves, [2]); assert.deepEqual(h.db, { x: 2, y: 2 });
+    assert.equal(h.movement(), movement);
+    assert.equal(h.subscriptions, 1); assert.equal(h.removals, 0);
+  });
+}
+
+test("맵 갱신 전 실행 중인 저장보다 갱신 후 저장을 먼저 실행하지 않는다", async (t) => {
+  const h = movementLifecycleHarness(); const gate = movementGate(); h.holdSave(gate.promise);
+  t.after(() => { gate.resolve(); h.dispose(); });
+  const first = h.movement().finish("token-a", { x: 1, y: 1 }); await settleMovement();
+  h.replaceMaps((maps) => maps.map((map) => ({ ...map, fog_enabled: true })));
+  const second = h.movement().finish("token-a", { x: 2, y: 2 }); await settleMovement();
+  assert.deepEqual(h.saves, [1]);
+  gate.resolve(); await Promise.all([first, second]);
+  assert.deepEqual(h.saves, [1, 2]); assert.deepEqual(h.db, { x: 2, y: 2 });
+});
+
+for (const scenario of ["룸 변경", "사용자 변경", "열람 권한 상실", "언마운트"]) {
+  test(`${scenario} 때는 실제 effect를 정리하고 이전 연결의 대기 요청을 폐기한다`, async (t) => {
+    const h = movementLifecycleHarness(); const gate = movementGate(); h.holdSend(gate.promise);
+    t.after(() => { gate.resolve(); h.dispose(); });
+    h.movement().preview("token-a", { x: 1, y: 1 }); await settleMovement();
+    const completed = h.movement().finish("token-a", { x: 2, y: 2 });
+    if (scenario === "룸 변경") { h.runtime.roomId = "room-b"; h.render(); }
+    if (scenario === "사용자 변경") { h.runtime.userId = "other-user"; h.render(); }
+    if (scenario === "열람 권한 상실") { h.runtime.canUse = () => false; h.render(); }
+    if (scenario === "언마운트") h.dispose();
+    gate.resolve(); await completed;
+    assert.equal(h.removals, 1); assert.deepEqual(h.saves, []);
+    assert.equal(h.subscriptions, scenario === "룸 변경" || scenario === "사용자 변경" ? 2 : 1);
+  });
+}

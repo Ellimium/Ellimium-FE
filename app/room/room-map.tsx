@@ -20,6 +20,7 @@ import {
 import { hideArea, rectangleFromPoints, type VisibilityArea } from "./map-visibility";
 import { useRoomPermissions } from "./room-permissions";
 import { gridCoordinate, mapPointFromClient } from "./token-position";
+import { createTokenMovement } from "./token-movement";
 import { revealMapTab } from "./map-tab-scroll";
 
 type RoomMapRow = {
@@ -72,6 +73,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const { role, currentUserId, members, checking, error: permissionError, canUse, loading: permissionLoading } = useRoomPermissions();
   const canViewMap = !permissionLoading && canUse("map_view");
   const [maps, setMaps] = useState<DisplayMap[]>([]);
+  const hasMaps = maps.length > 0;
   const [tokens, setTokens] = useState<DisplayToken[]>([]);
   const [tokenAssets, setTokenAssets] = useState<TokenAsset[]>([]);
   const [players, setPlayers] = useState<PlayerOption[]>([]);
@@ -104,7 +106,9 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   const [selectedDrawingId, setSelectedDrawingId] = useState("");
   const [drawingBusy, setDrawingBusy] = useState(false);
   const [actionError, setActionError] = useState("");
-  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const movementRef = useRef<ReturnType<typeof createTokenMovement> | null>(null);
+  const tokensRef = useRef(tokens);
+  tokensRef.current = tokens;
   const draggingRef = useRef(dragging);
   draggingRef.current = dragging;
   const pendingDragEnd = useRef<PendingDragEnd | null>(null);
@@ -283,6 +287,8 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }, [selectedId]);
 
   useEffect(() => {
+    const drag = draggingRef.current;
+    if (drag) { void movementRef.current?.cancel(drag.tokenId); setDragging(null); }
     setSelectedDrawingId("");
     setActionError("");
     setDrawingEditing(false);
@@ -297,56 +303,54 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
   }, [players, visibilityTarget]);
 
   useEffect(() => {
-    if (!roomId || !canViewMap || !maps.length) return;
+    if (!roomId || !currentUserId || !canViewMap || !hasMaps) return;
 
-    let active = true;
-    const mapIds = maps.map((map) => map.id);
-    const channel = supabase.channel(`room:${roomId}:tokens`, { config: { private: true, broadcast: { self: false } } });
-    channelRef.current = channel;
-
-    async function refreshPositions() {
-      const { data, error: positionError } = await supabase.from("room_tokens").select("id, x, y").in("map_id", mapIds);
-      if (!active) return;
-      if (positionError) {
-        setError("토큰의 확정 위치를 다시 불러올 수 없습니다.");
-        return;
-      }
-
-      const positions = new Map((data ?? []).map((token) => [token.id, token]));
-      setTokens((current) => current.map((token) => {
-        const position = positions.get(token.id);
-        return position ? { ...token, x: Number(position.x), y: Number(position.y) } : token;
-      }));
-    }
-
+    const movement = createTokenMovement({
+      userId: currentUserId,
+      send: async (id, position) => {
+        const { error } = await supabase.rpc("broadcast_token_movement", {
+          target_room_id: roomId, target_token_id: id, position_x: position.x, position_y: position.y,
+        });
+        if (error) throw error;
+      },
+      save: async (id, position) => {
+        const { data, error } = await supabase.from("room_tokens").update(position).eq("id", id).select("id").maybeSingle();
+        if (error || !data) throw error ?? new Error("token update denied");
+      },
+      read: async (id) => {
+        const { data, error } = await supabase.from("room_tokens").select("x, y").eq("id", id).maybeSingle();
+        if (error) throw error;
+        return data ? { x: Number(data.x), y: Number(data.y) } : null;
+      },
+      apply: (id, position) => setTokens((current) => current.map((token) => token.id === id ? { ...token, x: position.x, y: position.y } : token)),
+      error: setActionError,
+      denied: () => { setDragging(null); pendingDragEnd.current = null; },
+    });
+    movementRef.current = movement;
+    const channel = supabase.channel(`room:${roomId}:token-movements`, { config: { private: true } });
     channel
       .on("broadcast", { event: "token-move" }, ({ payload }) => {
-        const tokenId = typeof payload?.token_id === "string" ? payload.token_id : "";
-        const x = Number(payload?.x);
-        const y = Number(payload?.y);
-        if (!tokenId || !Number.isFinite(x) || !Number.isFinite(y)) return;
-        setTokens((current) => current.map((token) => token.id === tokenId ? { ...token, x, y } : token));
+        if (tokensRef.current.some((token) => token.id === payload?.token_id)) movement.receive(payload);
       })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "room_tokens" }, ({ new: updated }) => {
-        const tokenId = typeof updated.id === "string" ? updated.id : "";
-        const x = Number(updated.x);
-        const y = Number(updated.y);
-        if (!tokenId || !Number.isFinite(x) || !Number.isFinite(y)) return;
-        setTokens((current) => current.map((token) => token.id === tokenId ? { ...token, x, y } : token));
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "room_tokens" }, ({ new: updated, commit_timestamp }) => {
+        if (typeof updated.id !== "string" || !Number.isFinite(Number(updated.x)) || !Number.isFinite(Number(updated.y))) return;
+        if (updated.owner_id === null || typeof updated.owner_id === "string") {
+          setTokens((current) => current.map((token) => token.id === updated.id ? { ...token, owner_id: updated.owner_id as string | null } : token));
+        }
+        movement.confirmed(updated.id, { x: Number(updated.x), y: Number(updated.y) }, commit_timestamp);
       })
       .subscribe((status) => {
-        if (status === "SUBSCRIBED") void refreshPositions();
-        if (status === "CHANNEL_ERROR") setError("토큰 실시간 이동 채널에 연결할 수 없습니다.");
+        if (status === "SUBSCRIBED") for (const token of tokensRef.current) void movement.recover(token.id);
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setError("토큰 실시간 이동 채널에 연결할 수 없습니다.");
       });
 
     return () => {
-      active = false;
-      const drag = draggingRef.current;
-      if (drag) void channel.send({ type: "broadcast", event: "token-move", payload: { token_id: drag.tokenId, x: drag.startX, y: drag.startY } });
-      channelRef.current = null;
+      // Discard queued previews; peers recover any in-flight preview from DB after idle.
+      movement.dispose();
+      if (movementRef.current === movement) movementRef.current = null;
       void supabase.removeChannel(channel);
     };
-  }, [canViewMap, maps, roomId]);
+  }, [canViewMap, currentUserId, hasMaps, roomId]);
 
   useEffect(() => {
     if (!roomId || !canViewMap || !maps.length) {
@@ -421,8 +425,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
 
   useEffect(() => {
     if (dragging) {
-      setTokens((current) => current.map((token) => token.id === dragging.tokenId ? { ...token, x: dragging.startX, y: dragging.startY } : token));
-      broadcastPosition(dragging.tokenId, dragging.startX, dragging.startY);
+      void movementRef.current?.cancel(dragging.tokenId);
     }
     setDragging(null);
     setDrawingDrag(null);
@@ -434,14 +437,23 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     if (checking) return;
     if (!canMoveTokens) {
       if (dragging) {
-        setTokens((current) => current.map((token) => token.id === dragging.tokenId ? { ...token, x: dragging.startX, y: dragging.startY } : token));
-        broadcastPosition(dragging.tokenId, dragging.startX, dragging.startY);
+        void movementRef.current?.cancel(dragging.tokenId);
       }
       setDragging(null);
     }
     if (!canDraw) { setDrawingDrag(null); setDrawingEditing(false); }
     if (!canManageMap) { setFogDragging(null); setFogEditing(false); }
   }, [checking, canDraw, canManageMap, canMoveTokens, dragging]);
+
+  useEffect(() => {
+    if (!dragging || role === "master") return;
+    const token = tokens.find((token) => token.id === dragging.tokenId);
+    if (token?.owner_id !== currentUserId) {
+      void movementRef.current?.cancel(dragging.tokenId);
+      setDragging(null);
+      pendingDragEnd.current = null;
+    }
+  }, [tokens, dragging, role, currentUserId]);
 
   useEffect(() => {
     if (checking) return;
@@ -451,10 +463,6 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     if (end?.type === "drawing" && canDraw) { setDrawingDrag(null); void createDrawing(end.points); }
     if (end?.type === "fog" && canManageMap) { setFogDragging(null); completeFogDrag(end.area); }
   }, [checking, canDraw, canManageMap, canMoveTokens]);
-
-  function broadcastPosition(tokenId: string, x: number, y: number) {
-    void channelRef.current?.send({ type: "broadcast", event: "token-move", payload: { token_id: tokenId, x, y } });
-  }
 
   function dragPosition(clientX: number, clientY: number, svg: SVGSVGElement, drag: DragState) {
     if (!mapSize) return null;
@@ -490,28 +498,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     const position = dragPosition(event.clientX, event.clientY, event.currentTarget, dragging);
     if (!position) return;
 
-    setTokens((current) => current.map((token) => token.id === dragging.tokenId ? { ...token, ...position } : token));
-    broadcastPosition(dragging.tokenId, position.x, position.y);
-  }
-
-  async function persistPosition(tokenId: string, x: number, y: number, startX: number, startY: number) {
-    if (!canMoveTokens) return;
-    setActionError("");
-    try {
-      const { data, error: updateError } = await supabase
-        .from("room_tokens")
-        .update({ x, y })
-        .eq("id", tokenId)
-        .select("id")
-        .maybeSingle();
-      if (!updateError && data) return;
-    } catch {
-      // 아래에서 확정 좌표로 복구하고 같은 오류를 표시한다.
-    }
-
-    setTokens((current) => current.map((token) => token.id === tokenId ? { ...token, x: startX, y: startY } : token));
-    broadcastPosition(tokenId, startX, startY);
-    setActionError("토큰의 최종 위치를 저장할 수 없습니다.");
+    movementRef.current?.preview(dragging.tokenId, position);
   }
 
   function finishDrag(event: PointerEvent<SVGSVGElement>) {
@@ -519,23 +506,21 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     const drag = dragging;
     const position = dragPosition(event.clientX, event.clientY, event.currentTarget, drag);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    if (!position) { setDragging(null); return; }
+    if (!position) { void movementRef.current?.cancel(drag.tokenId); setDragging(null); return; }
     if (checking) { pendingDragEnd.current = { type: "token", drag, position }; return; }
     completeTokenDrag(drag, position);
   }
 
   function completeTokenDrag(drag: DragState, position: { x: number; y: number }) {
     setDragging(null);
-    setTokens((current) => current.map((token) => token.id === drag.tokenId ? { ...token, ...position } : token));
-    broadcastPosition(drag.tokenId, position.x, position.y);
-    void persistPosition(drag.tokenId, position.x, position.y, drag.startX, drag.startY);
+    setActionError("");
+    void movementRef.current?.finish(drag.tokenId, position);
   }
 
   function cancelDrag(event: PointerEvent<SVGSVGElement>) {
     if (!dragging || event.pointerId !== dragging.pointerId) return;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    setTokens((current) => current.map((token) => token.id === dragging.tokenId ? { ...token, x: dragging.startX, y: dragging.startY } : token));
-    broadcastPosition(dragging.tokenId, dragging.startX, dragging.startY);
+    void movementRef.current?.cancel(dragging.tokenId);
     pendingDragEnd.current = null;
     setDragging(null);
   }
@@ -553,9 +538,8 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
     event.preventDefault();
     const x = Number(token.x) + movement[0];
     const y = Number(token.y) + movement[1];
-    setTokens((current) => current.map((currentToken) => currentToken.id === token.id ? { ...currentToken, x, y } : currentToken));
-    broadcastPosition(token.id, x, y);
-    void persistPosition(token.id, x, y, Number(token.x), Number(token.y));
+    setActionError("");
+    void movementRef.current?.finish(token.id, { x, y });
   }
 
   async function createToken(event: FormEvent<HTMLFormElement>) {
@@ -906,7 +890,7 @@ export default function RoomMap({ roomId }: { roomId?: string }) {
             onPointerDown={controllable ? (event) => startDrag(event, token) : undefined}
             onKeyDown={controllable ? (event) => moveWithKeyboard(event, token) : undefined}
           >
-            <title>{token.name}{controllable ? " · 조작 가능" : " · 조회 전용"}</title>
+            <title>{`${token.name}${controllable ? " · 조작 가능" : " · 조회 전용"}`}</title>
             {token.imageUrl
               ? <image href={token.imageUrl} width={tokenSize} height={tokenSize} preserveAspectRatio="xMidYMid slice" />
               : <><rect width={tokenSize} height={tokenSize} /><text className="token-initial" x={tokenSize / 2} y={tokenSize / 2}>{token.name.slice(0, 1)}</text></>}
